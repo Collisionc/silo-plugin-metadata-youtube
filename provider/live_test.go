@@ -37,6 +37,14 @@ func TestLive(t *testing.T) {
 	}
 	t.Logf("search: %d hits, first %q (%s, %d)", len(hits), hits[0].Title, hits[0].ID, hits[0].Year)
 
+	// A channel ID with an underscore, as Silo passes the folder name: the
+	// underscore has become a space.
+	hits, err = p.Search(ctx, "Matthew Wood (PE & Brain Breaks) [UC8WBLj aquoUjJkXPXMC5aA]", nil)
+	if err != nil || len(hits) != 1 || hits[0].ID != underscoreChannelID {
+		t.Fatalf("underscore tag: hits = %+v, err = %v", hits, err)
+	}
+	t.Logf("underscore tag: %q (%s)", hits[0].Title, hits[0].ID)
+
 	detail, err := p.SeriesDetail(ctx, channelID)
 	if err != nil {
 		t.Fatalf("series: %v", err)

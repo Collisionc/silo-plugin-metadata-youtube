@@ -20,6 +20,9 @@ const (
 	uploadsID   = "UUA94TZluH5eQtkQpaCZQfRw"
 	playlistID  = "PL22J3VaeABQD_IZs7y60I3lUrrFTzkpat"
 	bannerImage = "https://yt3.googleusercontent.com/banner"
+	// underscoreChannelID has an underscore, which Silo turns into a space
+	// before it searches.
+	underscoreChannelID = "UC8WBLj_aquoUjJkXPXMC5aA"
 )
 
 // fakeYouTube serves canned API answers and counts calls per resource.
@@ -55,11 +58,18 @@ func (f *fakeYouTube) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var body any
 	switch resource {
 	case "channels":
-		if strings.Contains(","+q.Get("id")+",", ","+channelID+",") || q.Get("forHandle") == "@brainbreakland" {
-			body = map[string]any{"items": []any{channelJSON()}}
-		} else {
-			body = map[string]any{"items": []any{}}
+		items := []any{}
+		requested := "," + q.Get("id") + ","
+		if strings.Contains(requested, ","+channelID+",") || q.Get("forHandle") == "@brainbreakland" {
+			items = append(items, channelJSON())
 		}
+		if strings.Contains(requested, ","+underscoreChannelID+",") {
+			ch := channelJSON()
+			ch["id"] = underscoreChannelID
+			ch["snippet"].(map[string]any)["title"] = "Matthew Wood (PE & Brain Breaks)"
+			items = append(items, ch)
+		}
+		body = map[string]any{"items": items}
 	case "search":
 		body = map[string]any{"items": []any{
 			map[string]any{"id": map[string]any{"kind": "youtube#channel", "channelId": channelID}},
@@ -205,6 +215,29 @@ func TestSearchByHandleAndStoredID(t *testing.T) {
 	hits, err = p.Search(context.Background(), "anything", map[string]string{ProviderKey: playlistID})
 	if err != nil || len(hits) != 1 || hits[0].ID != playlistID || hits[0].Title != "Fitness Runs" {
 		t.Fatalf("stored ID: hits = %+v, err = %v", hits, err)
+	}
+}
+
+// Folder names as Silo hands them over: tags it does not know are kept, but
+// "_" becomes a space.
+func TestSearchFolderTagsAsSiloPassesThem(t *testing.T) {
+	p, fake := newTestProvider(t)
+	ctx := context.Background()
+
+	hits, err := p.Search(ctx, "BrainBreakLand [UCA94TZluH5eQtkQpaCZQfRw]", nil)
+	if err != nil || len(hits) != 1 || hits[0].ID != channelID {
+		t.Fatalf("bare tag: hits = %+v, err = %v", hits, err)
+	}
+
+	hits, err = p.Search(ctx, "Matthew Wood (PE & Brain Breaks) [UC8WBLj aquoUjJkXPXMC5aA]", nil)
+	if err != nil || len(hits) != 1 || hits[0].ID != underscoreChannelID {
+		t.Fatalf("underscore tag: hits = %+v, err = %v", hits, err)
+	}
+	if fake.count("search") != 0 {
+		t.Error("an ID in the folder name must not spend 100 units on a search")
+	}
+	if fake.count("channels") != 2 {
+		t.Errorf("channels calls = %d, want 2: the rebuilt candidates go in one lookup", fake.count("channels"))
 	}
 }
 

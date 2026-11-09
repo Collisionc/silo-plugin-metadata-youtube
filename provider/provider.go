@@ -117,6 +117,13 @@ func (p *Provider) Search(ctx context.Context, query string, providerIDs map[str
 		return []SearchHit{series.hit()}, nil
 	}
 
+	if series, err := p.repairedSeries(ctx, query); err != nil || series != nil {
+		if series == nil {
+			return nil, err
+		}
+		return []SearchHit{series.hit()}, nil
+	}
+
 	text := youtube.CleanQuery(query)
 	if text == "" {
 		return nil, nil
@@ -144,6 +151,43 @@ func (p *Provider) Search(ctx context.Context, query string, providerIDs map[str
 		hits = append(hits, series.hit())
 	}
 	return hits, nil
+}
+
+// repairedSeries finds the series behind a tag whose underscores Silo turned
+// into spaces ([UC8WBLj aquoUjJkXPXMC5aA]): it looks every rebuilt candidate
+// up in one call per kind (1 quota unit each) and takes the one that exists.
+func (p *Provider) repairedSeries(ctx context.Context, query string) (*Series, error) {
+	var channels, playlists []string
+	for _, ref := range youtube.RepairedRefs(query) {
+		if ref.Kind == youtube.RefChannel {
+			channels = append(channels, ref.ID)
+		} else {
+			playlists = append(playlists, ref.ID)
+		}
+	}
+	if len(playlists) > 0 {
+		found, err := p.yt.Playlists(ctx, playlists)
+		if err != nil {
+			return nil, err
+		}
+		if len(found) > 0 {
+			series := seriesFromPlaylist(found[0])
+			p.storeSeries(series)
+			return series, nil
+		}
+	}
+	if len(channels) > 0 {
+		found, err := p.yt.Channels(ctx, channels)
+		if err != nil {
+			return nil, err
+		}
+		if len(found) > 0 {
+			series := seriesFromChannel(found[0])
+			p.storeSeries(series)
+			return series, nil
+		}
+	}
+	return nil, nil
 }
 
 func (s *Series) hit() SearchHit {

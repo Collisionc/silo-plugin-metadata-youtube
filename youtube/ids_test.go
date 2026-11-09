@@ -37,6 +37,36 @@ func TestParseRef(t *testing.T) {
 	}
 }
 
+func TestRepairedRefs(t *testing.T) {
+	// One underscore: one candidate of the right length per spelling.
+	refs := RepairedRefs("Matthew Wood [UC8WBLj aquoUjJkXPXMC5aA]")
+	if len(refs) != 1 || refs[0] != (Ref{RefChannel, "UC8WBLj_aquoUjJkXPXMC5aA"}) {
+		t.Errorf("single underscore: %+v", refs)
+	}
+	// "__" collapsed to one space: only the doubled spelling is 24 long.
+	refs = RepairedRefs("Show [youtube-UCab cdefghijklmnopqrst]")
+	if len(refs) != 1 || refs[0].ID != "UCab__cdefghijklmnopqrst" {
+		t.Errorf("double underscore: %+v", refs)
+	}
+	// Two gaps that could each be either: every 24-character spelling.
+	refs = RepairedRefs("[UCabc defghij klmnopqrs]")
+	want := map[string]bool{"UCabc__defghij_klmnopqrs": true, "UCabc_defghij__klmnopqrs": true}
+	if len(refs) != 2 || !want[refs[0].ID] || !want[refs[1].ID] {
+		t.Errorf("two gaps: %+v", refs)
+	}
+	// A playlist tag loses its underscore the same way.
+	refs = RepairedRefs("Mix [PL22J3VaeABQD IZs7y60I3lUrrFTzkpat]")
+	if len(refs) != 1 || refs[0] != (Ref{RefPlaylist, "PL22J3VaeABQD_IZs7y60I3lUrrFTzkpat"}) {
+		t.Errorf("playlist: %+v", refs)
+	}
+	// Tags without spaces, and ordinary bracketed words, give nothing.
+	for _, text := range []string{"BrainBreakLand [UCA94TZluH5eQtkQpaCZQfRw]", "Show (PE & Brain Breaks)", "Show [UC is short]", "Plain title"} {
+		if refs := RepairedRefs(text); len(refs) != 0 {
+			t.Errorf("RepairedRefs(%q) = %+v", text, refs)
+		}
+	}
+}
+
 func TestParseVideoID(t *testing.T) {
 	cases := map[string]string{
 		"2024-01-02 - Mario's Winter Run [0bNNs5GTru0].mkv":       "0bNNs5GTru0",

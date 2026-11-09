@@ -66,6 +66,82 @@ func ParseRef(text string) (Ref, bool) {
 	return Ref{}, false
 }
 
+var (
+	// spacedTagRe is a bracketed tag whose content may have lost its
+	// underscores: Silo reads a folder title with "_" turned into spaces and
+	// runs of spaces collapsed, so [UC8WBLj_aquoUjJkXPXMC5aA] reaches the
+	// plugin as [UC8WBLj aquoUjJkXPXMC5aA], and a "__" as one space.
+	spacedTagRe   = regexp.MustCompile(`[\[\{\(]((?i:youtube[0-9]?-)?(?:UC|PL|UU|FL|LP|RD|OL)[ ` + idChars + `]{8,60})[\]\}\)]`)
+	tagPrefixRe   = regexp.MustCompile(`^(?i:youtube[0-9]?-)`)
+	idPartRe      = regexp.MustCompile(`^[` + idChars + `]+$`)
+	maxRepairGaps = 6 // 2^6 = 64 candidates, more than one lookup's 50 IDs
+)
+
+// RepairedRefs rebuilds the IDs a bracketed tag can have held before its
+// underscores became spaces. Each space stands for "_" or "__"; only
+// candidates of a valid length are returned, at most 50 per kind, so one
+// lookup can tell which exists. It returns nothing for a tag without spaces,
+// which ParseRef already reads.
+func RepairedRefs(text string) []Ref {
+	var refs []Ref
+	seen := make(map[string]bool)
+	counts := make(map[RefKind]int)
+	for _, m := range spacedTagRe.FindAllStringSubmatch(text, -1) {
+		content := tagPrefixRe.ReplaceAllString(m[1], "")
+		parts := strings.Fields(content)
+		if len(parts) < 2 || len(parts)-1 > maxRepairGaps {
+			continue
+		}
+		valid := true
+		for _, part := range parts {
+			if !idPartRe.MatchString(part) {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			continue
+		}
+		gaps := len(parts) - 1
+		for mask := 0; mask < 1<<gaps; mask++ {
+			var b strings.Builder
+			b.WriteString(parts[0])
+			for i := 1; i < len(parts); i++ {
+				if mask&(1<<(i-1)) != 0 {
+					b.WriteString("__")
+				} else {
+					b.WriteString("_")
+				}
+				b.WriteString(parts[i])
+			}
+			id := b.String()
+			kind, ok := idKind(id)
+			if !ok || seen[id] || counts[kind] >= 50 {
+				continue
+			}
+			seen[id] = true
+			counts[kind]++
+			refs = append(refs, Ref{Kind: kind, ID: id})
+		}
+	}
+	return refs
+}
+
+// idKind says whether id has a channel or playlist ID's length.
+func idKind(id string) (RefKind, bool) {
+	switch {
+	case strings.HasPrefix(id, "UC"):
+		return RefChannel, len(id) == 24
+	case strings.HasPrefix(id, "PL"):
+		return RefPlaylist, len(id) == 18 || len(id) == 34
+	case strings.HasPrefix(id, "UU"), strings.HasPrefix(id, "FL"), strings.HasPrefix(id, "LP"):
+		return RefPlaylist, len(id) == 24
+	case strings.HasPrefix(id, "RD"), strings.HasPrefix(id, "OL"):
+		return RefPlaylist, len(id) >= 12 && len(id) <= 50
+	}
+	return "", false
+}
+
 // ParseVideoID finds a video ID in a file name or URL.
 func ParseVideoID(text string) (string, bool) {
 	if m := videoURLRe.FindStringSubmatch(text); m != nil {

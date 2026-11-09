@@ -27,10 +27,18 @@ the folder name. The plugin looks for, in order:
 
 1. a playlist ID in a tag: `[youtube-PLxxxx]`, `[PLxxxx]`, or a `list=` URL;
 2. a channel ID: `[youtube-UCxxxx]`, `[youtube2-UCxxxx]`, `{youtube-UCxxxx}`,
-   `[UCxxxx]`, or a `/channel/UCxxxx` URL;
+   `[UCxxxx]`, or a `/channel/UCxxxx` URL, so
+   `BrainBreakLand [UCA94TZluH5eQtkQpaCZQfRw]` and
+   `Brain Break Land [youtube-UCA94TZluH5eQtkQpaCZQfRw]` both work;
 3. an `@handle`, alone or in a `youtube.com/@handle` URL;
 4. otherwise a YouTube channel search for the folder name without its
    bracketed tags (100 quota units), offering the top five channels.
+
+Silo turns underscores in a folder name into spaces before it searches, so a
+channel ID such as `UC8WBLj_aquoUjJkXPXMC5aA` arrives as
+`UC8WBLj aquoUjJkXPXMC5aA`. The plugin rebuilds the IDs a bracketed tag can
+have held and looks them up in one call (1 quota unit), so an ID with
+underscores in a tag still matches.
 
 A folder named exactly after the channel (`Brain Break Land`) usually matches
 by search. Put the channel ID in the name when a search picks the wrong
