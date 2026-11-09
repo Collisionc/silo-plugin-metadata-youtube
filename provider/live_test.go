@@ -40,10 +40,15 @@ func TestLive(t *testing.T) {
 	// A channel ID with an underscore, as Silo passes the folder name: the
 	// underscore has become a space.
 	hits, err = p.Search(ctx, "Matthew Wood (PE & Brain Breaks) [UC8WBLj aquoUjJkXPXMC5aA]", nil)
-	if err != nil || len(hits) != 1 || hits[0].ID != underscoreChannelID {
+	// The channel first, carrying the folder title as an alias, then its
+	// uploads playlist as the second candidate.
+	if err != nil || len(hits) != 2 || hits[0].ID != underscoreChannelID || hits[1].ID != "UU8WBLj_aquoUjJkXPXMC5aA" {
 		t.Fatalf("underscore tag: hits = %+v, err = %v", hits, err)
 	}
-	t.Logf("underscore tag: %q (%s)", hits[0].Title, hits[0].ID)
+	if len(hits[0].Aliases) == 0 || !strings.Contains(hits[0].Aliases[0], "[UC8WBLj aquoUjJkXPXMC5aA]") {
+		t.Errorf("underscore tag: aliases = %q, want the folder title", hits[0].Aliases)
+	}
+	t.Logf("underscore tag: %q (%s), then %q", hits[0].Title, hits[0].ID, hits[1].Title)
 
 	detail, err := p.SeriesDetail(ctx, channelID)
 	if err != nil {
