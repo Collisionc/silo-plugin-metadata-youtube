@@ -1,0 +1,49 @@
+name: Release
+
+# Pushing a v* tag builds the plugin for every platform in manifest.json and
+# publishes a GitHub release with the binaries, their checksums and a manifest
+# per platform. Install one in Silo with Admin > Plugins > Upload.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      GOWORK: off
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist
+          : > dist/checksums.txt
+          for platform in linux/amd64 linux/arm64 darwin/arm64; do
+            goos="${platform%%/*}" goarch="${platform##*/}"
+            binary="plugin-${goos}-${goarch}"
+            GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags="-s -w -X main.version=${version}" -o "dist/${binary}" .
+            checksum=$(sha256sum "dist/${binary}" | awk '{print $1}')
+            printf '%s  %s\n' "$checksum" "$binary" >> dist/checksums.txt
+            jq --arg v "$version" --arg c "$checksum" '.version = $v | .checksum = $c' manifest.json > "dist/manifest-${goos}-${goarch}.json"
+          done
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

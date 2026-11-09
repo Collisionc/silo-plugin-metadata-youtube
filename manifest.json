@@ -1,0 +1,76 @@
+{
+  "plugin_id": "collisionc.youtube",
+  "version": "0.1.0",
+  "checksum": "__CHECKSUM__",
+  "silo_api_version": "v1",
+  "presentation": {
+    "display_name": "YouTube Metadata",
+    "summary": "Show downloaded YouTube channels and playlists as TV series: one season per year, one episode per video.",
+    "description_markdown": "Maps a YouTube channel (or playlist) to a series, each year with uploads to a season, and each video to an episode dated by its upload, so channels downloaded by TubeSync, yt-dlp or similar tools behave like TV shows in Silo. Titles, descriptions, durations and thumbnails come from the YouTube Data API. Episodes are numbered MMDDxx within the year, as ZeroQI's Absolute Series Scanner numbers YouTube channels for Plex. The provider is installed disabled so it only runs in the libraries where you enable it.",
+    "setup_markdown": "1. Create a YouTube Data API v3 key in the Google Cloud console and enter it under **YouTube** below.\n2. Name each channel's folder after the channel, or put its ID in the name: `Channel Name [youtube-UCxxxxxxxxxxxxxxxxxxxxxx]`. A playlist folder takes `[youtube-PLxxxx]`.\n3. Name each file with its upload date, as TubeSync's `{yyyy_mm_dd} - {title_full} [{key}].{ext}` does: Silo links a dated file to the episode uploaded that day.\n4. Enable **YouTube** in the metadata provider chain of the TV library holding the channels, ahead of TVDB and TMDB, or alone.",
+    "homepage_url": "https://github.com/collisionc/silo-plugin-metadata-youtube",
+    "source_url": "https://github.com/collisionc/silo-plugin-metadata-youtube",
+    "support_url": "https://github.com/collisionc/silo-plugin-metadata-youtube/issues",
+    "changelog_url": "https://github.com/collisionc/silo-plugin-metadata-youtube/releases",
+    "publisher_name": "collisionc",
+    "publisher_url": "https://github.com/collisionc",
+    "license_spdx": "AGPL-3.0-or-later"
+  },
+  "supported_platforms": [
+    {
+      "os": "darwin",
+      "arch": "arm64"
+    },
+    {
+      "os": "linux",
+      "arch": "amd64"
+    },
+    {
+      "os": "linux",
+      "arch": "arm64"
+    }
+  ],
+  "capabilities": [
+    {
+      "type": "metadata_provider.v1",
+      "id": "youtube",
+      "display_name": "YouTube",
+      "description": "YouTube channels and playlists as TV series.",
+      "metadata": {
+        "default_priority": {
+          "series": 50,
+          "season": 50,
+          "episode": 50
+        },
+        "default_enabled": false
+      }
+    }
+  ],
+  "global_config_schema": [
+    {
+      "key": "youtube",
+      "title": "YouTube",
+      "description": "YouTube Data API access",
+      "required": false,
+      "json_schema": "{\"type\":\"object\",\"properties\":{\"api_key\":{\"type\":\"string\"},\"timezone\":{\"type\":\"string\"}},\"additionalProperties\":false}",
+      "admin_form": {
+        "fields": [
+          {
+            "key": "api_key",
+            "label": "API key",
+            "description": "A YouTube Data API v3 key. The default quota (10,000 units a day) covers listing thousands of videos a day; a channel search costs 100 units.",
+            "control": "ADMIN_FORM_CONTROL_PASSWORD",
+            "secret": true
+          },
+          {
+            "key": "timezone",
+            "label": "Upload date time zone",
+            "description": "The time zone your downloader dates files in (an IANA name such as America/New_York). yt-dlp and TubeSync use UTC, the default. Videos uploaded near midnight only link when this matches.",
+            "control": "ADMIN_FORM_CONTROL_TEXT",
+            "placeholder": "UTC"
+          }
+        ]
+      }
+    }
+  ]
+}

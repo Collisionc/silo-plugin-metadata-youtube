@@ -1,0 +1,6 @@
+/plugin
+/plugin.exe
+/dist/
+*.test
+go.work
+go.work.sum
