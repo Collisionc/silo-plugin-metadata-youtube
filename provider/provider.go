@@ -225,13 +225,16 @@ func channelAvatar(thumbs youtube.Thumbnails) string {
 	return thumbs.Best().URL
 }
 
-// channelBanner asks for the uncropped 2560x1440 banner. Without a size
-// suffix the image server returns a small default.
+// channelBanner asks for the whole banner, at most 2560 px wide, as the
+// series backdrop. Without a size suffix the image server returns a 512 px
+// thumbnail. "=w2560" never enlarges: a banner uploaded at 2048x1152 comes
+// back at that size (checked 2026-11-09). The longer crop suffixes YouTube's
+// own pages use are fussy: one with "-nfpr" answers HTTP 400.
 func channelBanner(url string) string {
 	if url == "" || strings.Contains(url, "=") {
 		return url
 	}
-	return url + "=w2560-fcrop64=1,00000000ffffffff-k-c0xffffffff-no-nfpr-rj"
+	return url + "=w2560"
 }
 
 func (p *Provider) cachedSeries(id string) (*Series, bool) {

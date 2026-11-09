@@ -299,7 +299,7 @@ func (s *metadataServer) GetImages(ctx context.Context, req *pluginv1.GetImagesR
 			response.Images = append(response.Images, &pluginv1.ImageRecord{Kind: "poster", Url: series.PosterURL})
 		}
 		if series.BannerURL != "" {
-			response.Images = append(response.Images, &pluginv1.ImageRecord{Kind: "backdrop", Url: series.BannerURL, Width: 2560, Height: 1440})
+			response.Images = append(response.Images, &pluginv1.ImageRecord{Kind: "backdrop", Url: series.BannerURL})
 		}
 	case "episode":
 		video, ok, err := p.Video(ctx, id)
