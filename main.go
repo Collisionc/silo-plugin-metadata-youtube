@@ -53,7 +53,7 @@ func (s *runtimeServer) GetManifest(context.Context, *pluginv1.GetManifestReques
 // Configure reads the API key and time zone. An unknown time zone falls back
 // to UTC with a warning rather than failing the plugin.
 func (s *runtimeServer) Configure(_ context.Context, req *pluginv1.ConfigureRequest) (*pluginv1.ConfigureResponse, error) {
-	apiKey, zone := "", ""
+	apiKey, zone, seasons, backdrop := "", "", "", ""
 	for _, entry := range req.GetConfig() {
 		if entry.GetKey() != configKey || entry.GetValue() == nil {
 			continue
@@ -65,6 +65,12 @@ func (s *runtimeServer) Configure(_ context.Context, req *pluginv1.ConfigureRequ
 		if v, ok := values["timezone"].(string); ok {
 			zone = strings.TrimSpace(v)
 		}
+		if v, ok := values["seasons"].(string); ok {
+			seasons = strings.TrimSpace(v)
+		}
+		if v, ok := values["backdrop"].(string); ok {
+			backdrop = strings.TrimSpace(v)
+		}
 	}
 	loc := time.UTC
 	if zone != "" {
@@ -74,7 +80,9 @@ func (s *runtimeServer) Configure(_ context.Context, req *pluginv1.ConfigureRequ
 			slog.Warn("youtube: unknown time zone, using UTC", "timezone", zone, "error", err)
 		}
 	}
-	p := provider.New(youtube.NewClient(youtubeBaseURL, apiKey, nil), loc)
+	p := provider.New(youtube.NewClient(youtubeBaseURL, apiKey, nil), loc,
+		provider.WithSeasonMode(provider.ParseSeasonMode(seasons)),
+		provider.WithBackdrop(provider.ParseBackdrop(backdrop)))
 	s.mu.Lock()
 	s.provider = p
 	s.mu.Unlock()
@@ -194,8 +202,8 @@ func seriesItem(detail *provider.SeriesDetail) (*pluginv1.MetadataItem, error) {
 		Networks:     []string{"YouTube"},
 		ProviderIds:  ids,
 		PosterPath:   detail.PosterURL,
-		BackdropPath: detail.BannerURL,
-		SeasonCount:  int32(len(detail.Years)),
+		BackdropPath: detail.BackdropURL,
+		SeasonCount:  int32(detail.Seasons),
 		FirstAirDate: detail.FirstAirDate,
 		LastAirDate:  detail.LastAirDate,
 		Status:       "Continuing",
@@ -303,8 +311,12 @@ func (s *metadataServer) GetImages(ctx context.Context, req *pluginv1.GetImagesR
 		if series.PosterURL != "" {
 			response.Images = append(response.Images, &pluginv1.ImageRecord{Kind: "poster", Url: series.PosterURL})
 		}
-		if series.BannerURL != "" {
-			response.Images = append(response.Images, &pluginv1.ImageRecord{Kind: "backdrop", Url: series.BannerURL})
+		backdrop, err := p.Backdrop(ctx, series)
+		if err != nil {
+			return response, err
+		}
+		if backdrop != "" {
+			response.Images = append(response.Images, &pluginv1.ImageRecord{Kind: "backdrop", Url: backdrop})
 		}
 	case "episode":
 		video, ok, err := p.Video(ctx, id)

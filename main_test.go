@@ -78,8 +78,12 @@ func fakeAPI(t *testing.T) {
 }
 
 func configured(t *testing.T) *metadataServer {
+	return configuredWith(t, map[string]any{"api_key": "k", "timezone": "Not/AZone", "backdrop": "banner"})
+}
+
+func configuredWith(t *testing.T, config map[string]any) *metadataServer {
 	t.Helper()
-	value, err := structpb.NewStruct(map[string]any{"api_key": "k", "timezone": "Not/AZone"})
+	value, err := structpb.NewStruct(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,5 +183,29 @@ func TestResolveImageURLsOnlyPassesHTTPS(t *testing.T) {
 	}
 	if got.GetUrls()["https://i.ytimg.com/a.jpg"] != "https://i.ytimg.com/a.jpg" || got.GetUrls()["/etc/passwd"] != "" || got.GetUrls()["http://x/y"] != "" {
 		t.Errorf("urls = %v", got.GetUrls())
+	}
+}
+
+// By default a series has no backdrop; one-season mode puts every video in
+// season 1.
+func TestConfigDefaultsAndSingleSeason(t *testing.T) {
+	fakeAPI(t)
+	ctx := context.Background()
+	ids, _ := structpb.NewStruct(map[string]any{"youtube": "UCA94TZluH5eQtkQpaCZQfRw"})
+
+	s := configuredWith(t, map[string]any{"api_key": "k"})
+	meta, err := s.GetMetadata(ctx, &pluginv1.GetMetadataRequest{ItemType: "series", ProviderIds: ids})
+	if err != nil || meta.GetItem().GetBackdropPath() != "" {
+		t.Errorf("default backdrop = %q, err = %v; want none", meta.GetItem().GetBackdropPath(), err)
+	}
+
+	s = configuredWith(t, map[string]any{"api_key": "k", "seasons": "single"})
+	meta, err = s.GetMetadata(ctx, &pluginv1.GetMetadataRequest{ItemType: "series", ProviderIds: ids})
+	if err != nil || meta.GetItem().GetSeasonCount() != 1 || meta.GetItem().GetYear() != 2024 {
+		t.Errorf("single season item = %+v, err = %v", meta.GetItem(), err)
+	}
+	episodes, err := s.GetEpisodes(ctx, &pluginv1.GetEpisodesRequest{SeriesProviderId: "UCA94TZluH5eQtkQpaCZQfRw", SeasonNumber: 1})
+	if err != nil || len(episodes.GetEpisodes()) != 1 || episodes.GetEpisodes()[0].GetEpisodeNumber() != 2024010201 || episodes.GetEpisodes()[0].GetSeasonNumber() != 1 {
+		t.Errorf("single season episodes = %+v, err = %v", episodes.GetEpisodes(), err)
 	}
 }

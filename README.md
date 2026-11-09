@@ -13,7 +13,8 @@ shows sports leagues:
 
 Titles, descriptions, durations and thumbnails come from the
 [YouTube Data API v3](https://developers.google.com/youtube/v3). The series
-poster is the channel's avatar and its backdrop the channel banner.
+poster is the channel's avatar; a backdrop (the channel banner or newest
+thumbnail) is optional.
 
 ## How files are matched
 
@@ -61,6 +62,11 @@ is `MMDDxx`: month, day, and its place among that day's uploads, from `01`.
 January 2nd's first upload is `S2024E10201`, its second `S2024E10202`. New
 uploads never renumber older episodes.
 
+With **Seasons** set to **One season**, every video is in season 1 and the
+year leads the number instead: `S1E2024010201`. Changing the setting
+renumbers every episode, so choose it before a channel has watch history,
+then refresh the channels' metadata.
+
 Silo links a file to an episode by the **date in its name**, so name files with
 their upload date, for example TubeSync's
 `{yyyy_mm_dd} - {title_full} [{key}].{ext}` or yt-dlp's
@@ -92,7 +98,11 @@ otherwise a video uploaded near midnight links to no episode.
    [releases](../../releases) (`plugin-linux-amd64` for most servers) and
    upload it under **Admin > Plugins**. To build it yourself:
    `make build-all`.
-3. Under the plugin's settings, enter the API key.
+3. Under the plugin's settings, enter the API key. **Seasons** chooses a
+   season per year or one season; **Backdrop** chooses the series background
+   art: none (the default, as banners and thumbnails carry lettering that
+   makes the description hard to read), the channel banner, or the newest
+   video's thumbnail.
 4. In the TV library holding the channels, enable **YouTube** in the metadata
    provider chain. The plugin installs disabled, so other libraries are not
    affected. Put it ahead of TVDB and TMDB, or leave it alone in that library,

@@ -33,9 +33,11 @@ const (
 // in-memory cache so one library refresh does not list a channel once per
 // season.
 type Provider struct {
-	yt  *youtube.Client
-	loc *time.Location
-	now func() time.Time
+	yt       *youtube.Client
+	loc      *time.Location
+	mode     SeasonMode
+	backdrop Backdrop
+	now      func() time.Time
 
 	mu       sync.Mutex
 	series   map[string]cached[*Series]
@@ -48,19 +50,58 @@ type cached[T any] struct {
 	expires time.Time
 }
 
+// Backdrop chooses a series' background art.
+type Backdrop string
+
+const (
+	// NoBackdrop leaves the series without background art, so its text sits
+	// on a plain background. The default: channel banners and thumbnails are
+	// full of logos and lettering that make the overview hard to read.
+	NoBackdrop Backdrop = "none"
+	// BannerBackdrop uses the channel's banner.
+	BannerBackdrop Backdrop = "banner"
+	// VideoBackdrop uses the newest upload's thumbnail.
+	VideoBackdrop Backdrop = "video"
+)
+
+// ParseBackdrop reads a configured backdrop; unknown or empty means none.
+func ParseBackdrop(value string) Backdrop {
+	switch Backdrop(value) {
+	case BannerBackdrop, VideoBackdrop:
+		return Backdrop(value)
+	}
+	return NoBackdrop
+}
+
+// Option adjusts a Provider.
+type Option func(*Provider)
+
+// WithSeasonMode sets how uploads are split into seasons.
+func WithSeasonMode(mode SeasonMode) Option { return func(p *Provider) { p.mode = mode } }
+
+// WithBackdrop sets the series background art.
+func WithBackdrop(backdrop Backdrop) Option { return func(p *Provider) { p.backdrop = backdrop } }
+
 // New returns a provider using client, dating uploads in loc (UTC when nil).
-func New(client *youtube.Client, loc *time.Location) *Provider {
+// By default seasons are years and series have no backdrop.
+func New(client *youtube.Client, loc *time.Location, options ...Option) *Provider {
 	if loc == nil {
 		loc = time.UTC
 	}
-	return &Provider{
+	p := &Provider{
 		yt:       client,
 		loc:      loc,
+		mode:     SeasonsByYear,
+		backdrop: NoBackdrop,
 		now:      time.Now,
 		series:   make(map[string]cached[*Series]),
 		listings: make(map[string]cached[[]NumberedUpload]),
 		videos:   make(map[string]cached[youtube.Video]),
 	}
+	for _, option := range options {
+		option(p)
+	}
+	return p
 }
 
 // Series is a channel or playlist as a Silo series.
@@ -428,7 +469,7 @@ func (p *Provider) Listing(ctx context.Context, series *Series) ([]NumberedUploa
 			Published: youtube.ParseTime(item.ContentDetails.VideoPublishedAt),
 		})
 	}
-	numbered := Number(uploads, p.loc)
+	numbered := Number(uploads, p.loc, p.mode)
 	p.mu.Lock()
 	p.listings[series.ID] = cached[[]NumberedUpload]{value: numbered, expires: p.now().Add(listingTTL)}
 	p.mu.Unlock()
@@ -448,9 +489,15 @@ func listable(item youtube.PlaylistItem) bool {
 // SeriesDetail is a series with the span of its uploads.
 type SeriesDetail struct {
 	*Series
-	Years        []int
+	// Years are the years with uploads, oldest first.
+	Years []int
+	// Seasons is how many seasons the series has: len(Years), or 1 in
+	// SingleSeason mode.
+	Seasons      int
 	FirstAirDate string
 	LastAirDate  string
+	// BackdropURL is the configured background art; empty for none.
+	BackdropURL string
 }
 
 // SeriesDetail looks the series up and lists its videos for its air dates and
@@ -464,22 +511,54 @@ func (p *Provider) SeriesDetail(ctx context.Context, id string) (*SeriesDetail, 
 	if err != nil {
 		return nil, err
 	}
-	detail := &SeriesDetail{Series: series, Years: years(listing)}
+	detail := &SeriesDetail{Series: series, Years: years(listing, p.loc)}
 	if len(listing) > 0 {
 		detail.FirstAirDate = listing[0].AirDate
 		detail.LastAirDate = listing[len(listing)-1].AirDate
+		detail.Seasons = len(detail.Years)
+		if p.mode == SingleSeason {
+			detail.Seasons = 1
+		}
 	}
+	backdrop, err := p.Backdrop(ctx, series)
+	if err != nil {
+		return nil, err
+	}
+	detail.BackdropURL = backdrop
 	return detail, nil
 }
 
-func years(listing []NumberedUpload) []int {
+func years(listing []NumberedUpload, loc *time.Location) []int {
 	var out []int
 	for _, upload := range listing {
-		if len(out) == 0 || out[len(out)-1] != upload.Season {
-			out = append(out, upload.Season)
+		year := upload.Published.In(loc).Year()
+		if len(out) == 0 || out[len(out)-1] != year {
+			out = append(out, year)
 		}
 	}
 	return out
+}
+
+// Backdrop returns the series' background art as configured; empty for none.
+// The video backdrop is the newest upload's largest thumbnail (one API unit
+// the first time, then cached).
+func (p *Provider) Backdrop(ctx context.Context, series *Series) (string, error) {
+	switch p.backdrop {
+	case BannerBackdrop:
+		return series.BannerURL, nil
+	case VideoBackdrop:
+		listing, err := p.Listing(ctx, series)
+		if err != nil || len(listing) == 0 {
+			return "", err
+		}
+		newest := listing[len(listing)-1].VideoID
+		details, err := p.videoDetails(ctx, []string{newest})
+		if err != nil {
+			return "", err
+		}
+		return details[newest].Snippet.Thumbnails.Best().URL, nil
+	}
+	return "", nil
 }
 
 // Season is one year of uploads.

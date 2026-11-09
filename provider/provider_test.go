@@ -417,3 +417,48 @@ func TestNoAPIKey(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNoAPIKey", err)
 	}
 }
+
+func TestSingleSeasonMode(t *testing.T) {
+	fake := &fakeYouTube{calls: map[string]int{}}
+	server := httptest.NewServer(fake)
+	t.Cleanup(server.Close)
+	p := New(youtube.NewClient(server.URL, testKey, server.Client()), time.UTC, WithSeasonMode(SingleSeason))
+	ctx := context.Background()
+
+	seasons, err := p.Seasons(ctx, channelID)
+	if err != nil || len(seasons) != 1 || seasons[0].Number != 1 || seasons[0].Count != 5 || seasons[0].AirDate != "2023-06-01" {
+		t.Fatalf("seasons = %+v, err = %v", seasons, err)
+	}
+	episodes, err := p.Episodes(ctx, channelID, 1)
+	if err != nil || len(episodes) != 5 {
+		t.Fatalf("episodes = %+v, err = %v", episodes, err)
+	}
+	if episodes[2].VideoID != "0bNNs5GTru0" || episodes[2].Number != 2024010201 || episodes[2].AirDate != "2024-01-02" {
+		t.Errorf("episode = %+v", episodes[2])
+	}
+	detail, err := p.SeriesDetail(ctx, channelID)
+	if err != nil || detail.Seasons != 1 || len(detail.Years) != 3 || detail.Years[0] != 2023 {
+		t.Errorf("detail seasons = %d, years = %v, err = %v", detail.Seasons, detail.Years, err)
+	}
+}
+
+func TestBackdropChoices(t *testing.T) {
+	cases := map[Backdrop]string{
+		NoBackdrop:     "",
+		BannerBackdrop: bannerImage + "=w2560",
+		VideoBackdrop:  "https://i.ytimg.com/vi/newestvid01/maxresdefault.jpg",
+	}
+	for choice, want := range cases {
+		fake := &fakeYouTube{calls: map[string]int{}}
+		server := httptest.NewServer(fake)
+		p := New(youtube.NewClient(server.URL, testKey, server.Client()), time.UTC, WithBackdrop(choice))
+		detail, err := p.SeriesDetail(context.Background(), channelID)
+		server.Close()
+		if err != nil || detail.BackdropURL != want {
+			t.Errorf("%s: backdrop = %q, want %q (err %v)", choice, detail.BackdropURL, want, err)
+		}
+	}
+	if ParseBackdrop("") != NoBackdrop || ParseBackdrop("banner") != BannerBackdrop || ParseBackdrop("video") != VideoBackdrop || ParseBackdrop("x") != NoBackdrop {
+		t.Error("ParseBackdrop")
+	}
+}

@@ -28,10 +28,31 @@ type NumberedUpload struct {
 // next day's numbers.
 const maxPerDay = 99
 
+// SeasonMode chooses how uploads are split into seasons.
+type SeasonMode string
+
+const (
+	// SeasonsByYear makes each year a season, episodes MMDDxx.
+	SeasonsByYear SeasonMode = "year"
+	// SingleSeason puts every upload in season 1, episodes YYYYMMDDxx: one
+	// list instead of a season per year. 2024010201 still fits Silo's 32-bit
+	// episode numbers, as does every date up to the year 2147.
+	SingleSeason SeasonMode = "single"
+)
+
+// ParseSeasonMode reads a configured mode; unknown or empty means by year.
+func ParseSeasonMode(value string) SeasonMode {
+	if SeasonMode(value) == SingleSeason {
+		return SingleSeason
+	}
+	return SeasonsByYear
+}
+
 // Number places uploads the way ZeroQI's Absolute Series Scanner places a
 // channel: the year is the season, and the episode number is MMDDxx, xx
 // counting that day's uploads from 01 in upload order. January 2nd's first
-// video is S2024E10201, its second S2024E10202.
+// video is S2024E10201, its second S2024E10202. In SingleSeason mode every
+// upload is in season 1 and the year leads the number: S1E2024010201.
 //
 // The numbers stay put as a channel grows: a new upload only takes the next
 // number of its own day. Removing an earlier video from the same day shifts
@@ -39,7 +60,7 @@ const maxPerDay = 99
 //
 // Uploads without a publish time cannot be placed and are left out. The
 // result is sorted by season and episode.
-func Number(uploads []Upload, loc *time.Location) []NumberedUpload {
+func Number(uploads []Upload, loc *time.Location, mode SeasonMode) []NumberedUpload {
 	if loc == nil {
 		loc = time.UTC
 	}
@@ -69,12 +90,17 @@ func Number(uploads []Upload, loc *time.Location) []NumberedUpload {
 		airDate := local.Format(time.DateOnly)
 		perDay[airDate]++
 		n := min(perDay[airDate], maxPerDay)
-		out = append(out, NumberedUpload{
+		numbered := NumberedUpload{
 			Upload:  upload,
 			Season:  local.Year(),
 			Episode: int(local.Month())*10000 + local.Day()*100 + n,
 			AirDate: airDate,
-		})
+		}
+		if mode == SingleSeason {
+			numbered.Season = 1
+			numbered.Episode += local.Year() * 1000000
+		}
+		out = append(out, numbered)
 	}
 	return out
 }

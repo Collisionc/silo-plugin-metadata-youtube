@@ -1,6 +1,6 @@
 {
   "plugin_id": "collisionc.youtube",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "checksum": "__CHECKSUM__",
   "silo_api_version": "v1",
   "presentation": {
@@ -52,7 +52,7 @@
       "title": "YouTube",
       "description": "YouTube Data API access",
       "required": false,
-      "json_schema": "{\"type\":\"object\",\"properties\":{\"api_key\":{\"type\":\"string\"},\"timezone\":{\"type\":\"string\"}},\"additionalProperties\":false}",
+      "json_schema": "{\"type\":\"object\",\"properties\":{\"api_key\":{\"type\":\"string\"},\"timezone\":{\"type\":\"string\"},\"seasons\":{\"type\":\"string\",\"enum\":[\"year\",\"single\"]},\"backdrop\":{\"type\":\"string\",\"enum\":[\"none\",\"banner\",\"video\"]}},\"additionalProperties\":false}",
       "admin_form": {
         "fields": [
           {
@@ -68,6 +68,44 @@
             "description": "The time zone your downloader dates files in (an IANA name such as America/New_York). yt-dlp and TubeSync use UTC, the default. Videos uploaded near midnight only link when this matches.",
             "control": "ADMIN_FORM_CONTROL_TEXT",
             "placeholder": "UTC"
+          },
+          {
+            "key": "seasons",
+            "label": "Seasons",
+            "description": "How a channel's videos are grouped. One season per year numbers episodes MMDDxx (S2024E10201); one season lists every video in season 1, numbered YYYYMMDDxx (S1E2024010201). Changing it renumbers every episode, so pick it before a channel has watch history.",
+            "control": "ADMIN_FORM_CONTROL_SELECT",
+            "default_value": "year",
+            "options": [
+              {
+                "value": "year",
+                "label": "One season per year"
+              },
+              {
+                "value": "single",
+                "label": "One season"
+              }
+            ]
+          },
+          {
+            "key": "backdrop",
+            "label": "Backdrop",
+            "description": "The series background art. Channel banners and video thumbnails are full of logos and lettering, which makes the description written over them hard to read; none keeps a plain background.",
+            "control": "ADMIN_FORM_CONTROL_SELECT",
+            "default_value": "none",
+            "options": [
+              {
+                "value": "none",
+                "label": "None"
+              },
+              {
+                "value": "banner",
+                "label": "Channel banner"
+              },
+              {
+                "value": "video",
+                "label": "Newest video's thumbnail"
+              }
+            ]
           }
         ]
       }
