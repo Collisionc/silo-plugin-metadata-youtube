@@ -40,6 +40,15 @@ channel ID such as `UC8WBLj_aquoUjJkXPXMC5aA` arrives as
 have held and looks them up in one call (1 quota unit), so an ID with
 underscores in a tag still matches.
 
+Silo checks a provider's answer against the folder title before accepting it,
+and a lone answer needs more than a YouTube channel can score (no TMDB, TVDB
+or IMDb ID, no second provider, no year in the folder name). So when the
+folder names a channel outright, the plugin returns the folder title as an
+alias of the channel, and the channel's uploads playlist ("Uploads from
+...") as a second candidate; the channel then wins clearly. If a channel
+stays unmatched, use **Match** on it and pick the channel (the uploads
+playlist lists the same videos and works too).
+
 A folder named exactly after the channel (`Brain Break Land`) usually matches
 by search. Put the channel ID in the name when a search picks the wrong
 channel, or use Silo's **Match** with the channel URL or `@handle`.

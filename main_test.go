@@ -99,11 +99,14 @@ func TestSeriesThroughTheGRPCHandlers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(search.GetResults()) != 1 || search.GetResults()[0].GetProviderId() != "UCA94TZluH5eQtkQpaCZQfRw" {
+	if len(search.GetResults()) != 2 || search.GetResults()[0].GetProviderId() != "UCA94TZluH5eQtkQpaCZQfRw" {
 		t.Fatalf("search = %+v", search.GetResults())
 	}
 	if got := search.GetResults()[0].GetProviderIds().AsMap()["youtube"]; got != "UCA94TZluH5eQtkQpaCZQfRw" {
 		t.Errorf("provider_ids.youtube = %v", got)
+	}
+	if aliases := search.GetResults()[0].GetTitleAliases(); len(aliases) != 1 || aliases[0].GetTitle() != "Brain Break Land [youtube-UCA94TZluH5eQtkQpaCZQfRw]" {
+		t.Errorf("title_aliases = %+v, want the folder title", aliases)
 	}
 
 	movie, err := s.Search(ctx, &pluginv1.SearchMetadataRequest{Query: "anything", ItemType: "movie"})

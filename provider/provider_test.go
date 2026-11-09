@@ -67,6 +67,7 @@ func (f *fakeYouTube) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ch := channelJSON()
 			ch["id"] = underscoreChannelID
 			ch["snippet"].(map[string]any)["title"] = "Matthew Wood (PE & Brain Breaks)"
+			ch["contentDetails"] = map[string]any{"relatedPlaylists": map[string]any{"uploads": "UU8WBLj_aquoUjJkXPXMC5aA"}}
 			items = append(items, ch)
 		}
 		body = map[string]any{"items": items}
@@ -180,8 +181,14 @@ func TestSearchByFolderTagLooksTheChannelUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(hits) != 1 || hits[0].ID != channelID || hits[0].Title != "Brain Break Land" || hits[0].Year != 2021 {
+	if len(hits) != 2 || hits[0].ID != channelID || hits[0].Title != "Brain Break Land" || hits[0].Year != 2021 {
 		t.Fatalf("hits = %+v", hits)
+	}
+	if hits[1].ID != uploadsID || hits[1].Title != "Uploads from Brain Break Land" || len(hits[1].Aliases) != 0 {
+		t.Errorf("second hit = %+v, want the uploads playlist without aliases", hits[1])
+	}
+	if len(hits[0].Aliases) != 1 || hits[0].Aliases[0] != "Brain Break Land [youtube-"+channelID+"]" {
+		t.Errorf("aliases = %q, want the folder title", hits[0].Aliases)
 	}
 	if hits[0].ImageURL != "https://yt3.ggpht.com/avatar=s800" {
 		t.Errorf("poster = %q, want the largest avatar", hits[0].ImageURL)
@@ -209,7 +216,7 @@ func TestSearchByTitleKeepsYouTubesRanking(t *testing.T) {
 func TestSearchByHandleAndStoredID(t *testing.T) {
 	p, _ := newTestProvider(t)
 	hits, err := p.Search(context.Background(), "https://www.youtube.com/@brainbreakland", nil)
-	if err != nil || len(hits) != 1 || hits[0].ID != channelID {
+	if err != nil || len(hits) != 2 || hits[0].ID != channelID {
 		t.Fatalf("handle: hits = %+v, err = %v", hits, err)
 	}
 	hits, err = p.Search(context.Background(), "anything", map[string]string{ProviderKey: playlistID})
@@ -225,19 +232,59 @@ func TestSearchFolderTagsAsSiloPassesThem(t *testing.T) {
 	ctx := context.Background()
 
 	hits, err := p.Search(ctx, "BrainBreakLand [UCA94TZluH5eQtkQpaCZQfRw]", nil)
-	if err != nil || len(hits) != 1 || hits[0].ID != channelID {
+	if err != nil || len(hits) != 2 || hits[0].ID != channelID {
 		t.Fatalf("bare tag: hits = %+v, err = %v", hits, err)
 	}
+	// Silo compares the folder title with the result's titles: the folder
+	// title itself must be among them, with and without its tag.
+	if strings.Join(hits[0].Aliases, "|") != "BrainBreakLand [UCA94TZluH5eQtkQpaCZQfRw]|BrainBreakLand" {
+		t.Errorf("aliases = %q", hits[0].Aliases)
+	}
 
-	hits, err = p.Search(ctx, "Matthew Wood (PE & Brain Breaks) [UC8WBLj aquoUjJkXPXMC5aA]", nil)
-	if err != nil || len(hits) != 1 || hits[0].ID != underscoreChannelID {
+	hits, err = p.Search(ctx, "Matthew Wood [UC8WBLj aquoUjJkXPXMC5aA]", nil)
+	if err != nil || len(hits) != 2 || hits[0].ID != underscoreChannelID || hits[1].ID != "UU8WBLj_aquoUjJkXPXMC5aA" {
 		t.Fatalf("underscore tag: hits = %+v, err = %v", hits, err)
+	}
+	if strings.Join(hits[0].Aliases, "|") != "Matthew Wood [UC8WBLj aquoUjJkXPXMC5aA]|Matthew Wood" {
+		t.Errorf("aliases = %q", hits[0].Aliases)
 	}
 	if fake.count("search") != 0 {
 		t.Error("an ID in the folder name must not spend 100 units on a search")
 	}
 	if fake.count("channels") != 2 {
 		t.Errorf("channels calls = %d, want 2: the rebuilt candidates go in one lookup", fake.count("channels"))
+	}
+}
+
+// A folder named after the channel without its spaces still matches its
+// title, but a channel search's other results get no alias.
+func TestSearchByTitleRunTogether(t *testing.T) {
+	p, _ := newTestProvider(t)
+	hits, err := p.Search(context.Background(), "BrainBreakLand", nil)
+	if err != nil || len(hits) != 1 || hits[0].ID != channelID {
+		t.Fatalf("hits = %+v, err = %v", hits, err)
+	}
+	if len(hits[0].Aliases) != 1 || hits[0].Aliases[0] != "BrainBreakLand" {
+		t.Errorf("aliases = %q", hits[0].Aliases)
+	}
+	hits, err = p.Search(context.Background(), "Brain Break Land", nil)
+	if err != nil || len(hits) != 1 || len(hits[0].Aliases) != 0 {
+		t.Fatalf("exact title: hits = %+v, err = %v", hits, err)
+	}
+}
+
+// The uploads playlist offered beside a channel can be chosen and filled in.
+func TestUploadsPlaylistSeries(t *testing.T) {
+	p, fake := newTestProvider(t)
+	detail, err := p.SeriesDetail(context.Background(), uploadsID)
+	if err != nil || detail == nil {
+		t.Fatalf("detail = %+v, err = %v", detail, err)
+	}
+	if detail.Title != "Uploads from Brain Break Land" || detail.PlaylistID != uploadsID || detail.PosterURL == "" || len(detail.Years) != 3 {
+		t.Errorf("detail = %+v", detail.Series)
+	}
+	if fake.count("playlists") != 0 {
+		t.Error("an uploads playlist is built from its channel, not looked up as a playlist")
 	}
 }
 

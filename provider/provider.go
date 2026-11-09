@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/collisionc/silo-plugin-metadata-youtube/youtube"
 )
@@ -84,6 +85,11 @@ type SearchHit struct {
 	Year     int
 	Overview string
 	ImageURL string
+	// Aliases are other titles the hit is known by. Silo accepts a search
+	// result only when its title, or one of these, resembles the title on disk
+	// closely enough; "BrainBreakLand [UCA94TZluH5eQtkQpaCZQfRw]" scores far
+	// too low against "Brain Break Land" on its own.
+	Aliases []string
 }
 
 // Search finds the series a library folder (or an administrator's search)
@@ -97,7 +103,7 @@ func (p *Provider) Search(ctx context.Context, query string, providerIDs map[str
 		if err != nil || series == nil {
 			return nil, err
 		}
-		return []SearchHit{series.hit()}, nil
+		return []SearchHit{series.identified(query)}, nil
 	}
 
 	if ref, ok := youtube.ParseRef(query); ok {
@@ -114,14 +120,14 @@ func (p *Provider) Search(ctx context.Context, query string, providerIDs map[str
 		if err != nil || series == nil {
 			return nil, err
 		}
-		return []SearchHit{series.hit()}, nil
+		return series.namedHits(query), nil
 	}
 
 	if series, err := p.repairedSeries(ctx, query); err != nil || series != nil {
 		if series == nil {
 			return nil, err
 		}
-		return []SearchHit{series.hit()}, nil
+		return series.namedHits(query), nil
 	}
 
 	text := youtube.CleanQuery(query)
@@ -148,9 +154,78 @@ func (p *Provider) Search(ctx context.Context, query string, providerIDs map[str
 		}
 		series := seriesFromChannel(ch)
 		p.storeSeries(series)
-		hits = append(hits, series.hit())
+		hit := series.hit()
+		// The folder is the channel's name run together or punctuated
+		// differently ("BrainBreakLand" for "Brain Break Land"): the same
+		// name, which Silo's title comparison would not see.
+		if compact(text) != "" && compact(text) == compact(series.Title) && text != series.Title {
+			hit.Aliases = []string{text}
+		}
+		hits = append(hits, hit)
 	}
 	return hits, nil
+}
+
+// namedHits answers a query that named a series outright. A channel comes
+// with its uploads playlist as a second, real candidate.
+//
+// Silo accepts a lone search result automatically only at a match score of
+// 70. A YouTube channel cannot reach that: an exact title is worth 45, one
+// provider 12 and having an ID 5, while the points for a matching year, a
+// trusted TMDB/TVDB/IMDb ID or a second provider never apply to it. With
+// several candidates Silo instead takes the best when it scores at least 55
+// and leads the next by 15. The channel, carrying the folder title as an
+// exact alias, scores 62; its uploads playlist, "Uploads from <channel>",
+// scores far lower against the folder title, so the channel wins. Choosing
+// the playlist by hand in Silo's Match dialog also works: it lists the same
+// videos.
+func (s *Series) namedHits(query string) []SearchHit {
+	hits := []SearchHit{s.identified(query)}
+	if uploads := s.uploadsSeries(); uploads != nil {
+		hits = append(hits, uploads.hit())
+	}
+	return hits
+}
+
+// uploadsSeries is a channel's uploads playlist as a series of its own; nil
+// for a playlist.
+func (s *Series) uploadsSeries() *Series {
+	if s.Kind != youtube.RefChannel || s.PlaylistID == "" || s.PlaylistID == s.ID {
+		return nil
+	}
+	uploads := *s
+	uploads.ID = s.PlaylistID
+	uploads.Kind = youtube.RefPlaylist
+	uploads.Title = "Uploads from " + s.Title
+	uploads.BannerURL = ""
+	return &uploads
+}
+
+// identified is the hit for a series the query named outright, by an ID,
+// URL or @handle in it, or a YouTube ID Silo already stored. The folder title
+// itself then names this series, so it goes back as an alias, with and
+// without its bracketed tags, and Silo's title comparison accepts the match.
+func (s *Series) identified(query string) SearchHit {
+	hit := s.hit()
+	seen := map[string]bool{s.Title: true}
+	for _, alias := range []string{strings.TrimSpace(query), youtube.CleanQuery(query)} {
+		if alias != "" && !seen[alias] {
+			seen[alias] = true
+			hit.Aliases = append(hit.Aliases, alias)
+		}
+	}
+	return hit
+}
+
+// compact lowercases s and keeps only its letters and digits.
+func compact(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
 
 // repairedSeries finds the series behind a tag whose underscores Silo turned
@@ -217,6 +292,20 @@ func (p *Provider) SeriesByID(ctx context.Context, id string) (*Series, error) {
 		p.storeSeries(series)
 		return series, nil
 	}
+	// A channel's uploads playlist (UU...), offered by namedHits: built from
+	// the channel, as the playlist's own record carries no artwork.
+	if channelID := channelForUploads(id); channelID != "" {
+		channels, err := p.yt.Channels(ctx, []string{channelID})
+		if err != nil || len(channels) == 0 {
+			return nil, err
+		}
+		channel := seriesFromChannel(channels[0])
+		p.storeSeries(channel)
+		if uploads := channel.uploadsSeries(); uploads != nil && uploads.ID == id {
+			p.storeSeries(uploads)
+			return uploads, nil
+		}
+	}
 	playlists, err := p.yt.Playlists(ctx, []string{id})
 	if err != nil || len(playlists) == 0 {
 		return nil, err
@@ -224,6 +313,16 @@ func (p *Provider) SeriesByID(ctx context.Context, id string) (*Series, error) {
 	series := seriesFromPlaylist(playlists[0])
 	p.storeSeries(series)
 	return series, nil
+}
+
+// channelForUploads returns the channel an uploads playlist ID belongs to.
+func channelForUploads(id string) string {
+	if len(id) == 24 && strings.HasPrefix(id, "UU") {
+		if channel := "UC" + id[2:]; youtube.IsChannelID(channel) {
+			return channel
+		}
+	}
+	return ""
 }
 
 func (p *Provider) seriesByHandle(ctx context.Context, handle string) (*Series, error) {

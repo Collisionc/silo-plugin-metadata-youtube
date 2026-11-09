@@ -113,14 +113,19 @@ func (s *metadataServer) Search(ctx context.Context, req *pluginv1.SearchMetadat
 		if err != nil {
 			return nil, err
 		}
+		var aliases []*pluginv1.TitleAlias
+		for _, alias := range hit.Aliases {
+			aliases = append(aliases, &pluginv1.TitleAlias{Title: alias, Kind: "alternate"})
+		}
 		response.Results = append(response.Results, &pluginv1.ProviderSearchResult{
-			ProviderId:  hit.ID,
-			ItemType:    req.GetItemType(),
-			Title:       hit.Title,
-			Year:        int32(hit.Year),
-			Overview:    hit.Overview,
-			ProviderIds: ids,
-			ImageUrl:    hit.ImageURL,
+			ProviderId:   hit.ID,
+			ItemType:     req.GetItemType(),
+			Title:        hit.Title,
+			Year:         int32(hit.Year),
+			Overview:     hit.Overview,
+			ProviderIds:  ids,
+			ImageUrl:     hit.ImageURL,
+			TitleAliases: aliases,
 		})
 	}
 	return response, nil
