@@ -256,6 +256,31 @@ func TestSearchFolderTagsAsSiloPassesThem(t *testing.T) {
 	}
 }
 
+// A playlist folder ("BattleBots [PL...]") matches the playlist, carrying the
+// folder title, with its owner's uploads as the weaker second candidate.
+func TestSearchByPlaylistTag(t *testing.T) {
+	p, fake := newTestProvider(t)
+	ctx := context.Background()
+	for _, query := range []string{
+		"BattleBots [" + playlistID + "]",
+		"BattleBots [PL22J3VaeABQD IZs7y60I3lUrrFTzkpat]",
+	} {
+		hits, err := p.Search(ctx, query, nil)
+		if err != nil || len(hits) != 2 || hits[0].ID != playlistID || hits[1].ID != uploadsID {
+			t.Fatalf("%q: hits = %+v, err = %v", query, hits, err)
+		}
+		if strings.Join(hits[0].Aliases, "|") != query+"|BattleBots" {
+			t.Errorf("%q: aliases = %q", query, hits[0].Aliases)
+		}
+		if hits[1].Title != "Uploads from Brain Break Land" || len(hits[1].Aliases) != 0 {
+			t.Errorf("%q: second hit = %+v", query, hits[1])
+		}
+	}
+	if fake.count("search") != 0 || fake.count("channels") != 0 {
+		t.Errorf("calls = %v, want playlist lookups only", fake.calls)
+	}
+}
+
 // A folder named after the channel without its spaces still matches its
 // title, but a channel search's other results get no alias.
 func TestSearchByTitleRunTogether(t *testing.T) {

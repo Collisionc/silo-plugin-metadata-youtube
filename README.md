@@ -50,6 +50,10 @@ alias of the channel, and the channel's uploads playlist ("Uploads from
 stays unmatched, use **Match** on it and pick the channel (the uploads
 playlist lists the same videos and works too).
 
+A playlist folder such as `BattleBots [PLrpqCP1_qdKhShZPqyWk9xJp0HIqRKc-t]`
+works the same way: the playlist comes back with the folder title as an alias,
+and its owner's uploads playlist as the weaker second candidate.
+
 A folder named exactly after the channel (`Brain Break Land`) usually matches
 by search. Put the channel ID in the name when a search picks the wrong
 channel, or use Silo's **Match** with the channel URL or `@handle`.

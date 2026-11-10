@@ -110,6 +110,7 @@ type Series struct {
 	Kind        youtube.RefKind // RefChannel or RefPlaylist
 	Title       string
 	Overview    string
+	ChannelID   string // the channel itself, or the playlist's owner
 	ChannelName string
 	PosterURL   string
 	BannerURL   string
@@ -208,7 +209,8 @@ func (p *Provider) Search(ctx context.Context, query string, providerIDs map[str
 }
 
 // namedHits answers a query that named a series outright. A channel comes
-// with its uploads playlist as a second, real candidate.
+// with its uploads playlist as a second, real candidate, and a playlist with
+// its owner's uploads playlist.
 //
 // Silo accepts a lone search result automatically only at a match score of
 // 70. A YouTube channel cannot reach that: an exact title is worth 45, one
@@ -219,13 +221,37 @@ func (p *Provider) Search(ctx context.Context, query string, providerIDs map[str
 // exact alias, scores 62; its uploads playlist, "Uploads from <channel>",
 // scores far lower against the folder title, so the channel wins. Choosing
 // the playlist by hand in Silo's Match dialog also works: it lists the same
-// videos.
+// videos. A named playlist wins over its owner's uploads the same way.
 func (s *Series) namedHits(query string) []SearchHit {
 	hits := []SearchHit{s.identified(query)}
 	if uploads := s.uploadsSeries(); uploads != nil {
 		hits = append(hits, uploads.hit())
+	} else if uploads := s.ownerUploads(); uploads != nil {
+		hits = append(hits, uploads.hit())
 	}
 	return hits
+}
+
+// ownerUploads is the uploads playlist of the channel owning a playlist; nil
+// for a channel, an ownerless playlist (a mix) or an uploads playlist itself.
+// It is only a search candidate: chosen, SeriesByID builds it from the
+// channel.
+func (s *Series) ownerUploads() *Series {
+	if s.Kind != youtube.RefPlaylist || s.ChannelName == "" {
+		return nil
+	}
+	id := youtube.UploadsPlaylistFor(s.ChannelID)
+	if id == "" || id == s.ID {
+		return nil
+	}
+	return &Series{
+		ID:          id,
+		Kind:        youtube.RefPlaylist,
+		Title:       "Uploads from " + s.ChannelName,
+		ChannelID:   s.ChannelID,
+		ChannelName: s.ChannelName,
+		PlaylistID:  id,
+	}
 }
 
 // uploadsSeries is a channel's uploads playlist as a series of its own; nil
@@ -382,6 +408,7 @@ func seriesFromChannel(ch youtube.Channel) *Series {
 		Kind:        youtube.RefChannel,
 		Title:       ch.Snippet.Title,
 		Overview:    strings.TrimSpace(ch.Snippet.Description),
+		ChannelID:   ch.ID,
 		ChannelName: ch.Snippet.Title,
 		PosterURL:   channelAvatar(ch.Snippet.Thumbnails),
 		BannerURL:   channelBanner(ch.BrandingSettings.Image.BannerExternalURL),
@@ -396,6 +423,7 @@ func seriesFromPlaylist(pl youtube.Playlist) *Series {
 		Kind:        youtube.RefPlaylist,
 		Title:       pl.Snippet.Title,
 		Overview:    strings.TrimSpace(pl.Snippet.Description),
+		ChannelID:   pl.Snippet.ChannelID,
 		ChannelName: pl.Snippet.ChannelTitle,
 		PosterURL:   pl.Snippet.Thumbnails.Best().URL,
 		Published:   youtube.ParseTime(pl.Snippet.PublishedAt),
