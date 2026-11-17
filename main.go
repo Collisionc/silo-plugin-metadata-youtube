@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/types/known/structpb"
@@ -141,6 +142,9 @@ func (s *metadataServer) Search(ctx context.Context, req *pluginv1.SearchMetadat
 
 func (s *metadataServer) GetMetadata(ctx context.Context, req *pluginv1.GetMetadataRequest) (*pluginv1.GetMetadataResponse, error) {
 	id := providerID(req.GetProviderIds(), req.GetProviderId())
+	if req.GetItemType() == "episode" {
+		id = episodeVideoID(req.GetProviderIds(), req.GetProviderId(), req.GetFilePath())
+	}
 	if id == "" {
 		return &pluginv1.GetMetadataResponse{}, nil
 	}
@@ -180,6 +184,32 @@ func (s *metadataServer) GetMetadata(ctx context.Context, req *pluginv1.GetMetad
 		}}, nil
 	}
 	return &pluginv1.GetMetadataResponse{}, nil
+}
+
+// unidentified counts the episode lookups that named no video.
+var unidentified atomic.Int64
+
+// episodeVideoID picks the video an episode lookup is about. Silo keeps a
+// provider's ID for a series but not for an episode, so the lookup can arrive
+// with the series' ID or with none; the file names its own video
+// ("... [0bNNs5GTru0].mkv"). An ID that is not a video's is never sent to
+// YouTube as one: that would spend a quota unit to find nothing. The first
+// few lookups that name no video are logged with what they carried, so
+// Silo's log shows what its refresh sends.
+func episodeVideoID(ids *structpb.Struct, fallback, filePath string) string {
+	own := stringMap(ids)[provider.ProviderKey]
+	for _, candidate := range []string{own, strings.TrimSpace(fallback)} {
+		if youtube.IsVideoID(candidate) {
+			return candidate
+		}
+	}
+	if id, ok := youtube.VideoIDFromPath(filePath); ok {
+		return id
+	}
+	if unidentified.Add(1) <= 3 {
+		slog.Warn("youtube: an episode lookup names no video", "provider_id", fallback, "youtube_id", own, "file_path", filePath)
+	}
+	return ""
 }
 
 func seriesItem(detail *provider.SeriesDetail) (*pluginv1.MetadataItem, error) {
@@ -319,6 +349,9 @@ func (s *metadataServer) GetImages(ctx context.Context, req *pluginv1.GetImagesR
 			response.Images = append(response.Images, &pluginv1.ImageRecord{Kind: "backdrop", Url: backdrop})
 		}
 	case "episode":
+		if !youtube.IsVideoID(id) {
+			return response, nil // the series' ID: no video to look up
+		}
 		video, ok, err := p.Video(ctx, id)
 		if err != nil || !ok {
 			return response, err

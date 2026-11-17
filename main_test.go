@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
@@ -56,9 +57,13 @@ func TestManifest(t *testing.T) {
 	}
 }
 
+// fakeAPICalls counts the requests the fake API has answered.
+var fakeAPICalls atomic.Int64
+
 func fakeAPI(t *testing.T) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fakeAPICalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")
 		switch strings.TrimPrefix(r.URL.Path, "/") {
 		case "channels":
@@ -164,6 +169,41 @@ func TestSeriesThroughTheGRPCHandlers(t *testing.T) {
 	seasonImages, err := s.GetImages(ctx, &pluginv1.GetImagesRequest{ItemType: "series", ProviderId: "UCA94TZluH5eQtkQpaCZQfRw/2024"})
 	if err != nil || len(seasonImages.GetImages()) != 0 {
 		t.Errorf("season images = %+v, %v", seasonImages.GetImages(), err)
+	}
+}
+
+// Silo keeps no ID for an episode, so an episode lookup arrives with the
+// series' ID or with none. The file's name says which video it is.
+func TestEpisodeLookupFindsTheVideoInTheFileName(t *testing.T) {
+	fakeAPI(t)
+	s := configured(t)
+	ctx := context.Background()
+	series, _ := structpb.NewStruct(map[string]any{"youtube": "UCA94TZluH5eQtkQpaCZQfRw"})
+	file := "/media/YouTube/Brain Break Land [UCA94TZluH5eQtkQpaCZQfRw]/2024-01-02 - Mario's Winter Run [0bNNs5GTru0].mkv"
+
+	for name, req := range map[string]*pluginv1.GetMetadataRequest{
+		"the series' ID and the file": {ItemType: "episode", ProviderIds: series, FilePath: file},
+		"the file alone":              {ItemType: "episode", FilePath: file},
+		"the video's own ID":          {ItemType: "episode", ProviderId: "0bNNs5GTru0"},
+	} {
+		meta, err := s.GetMetadata(ctx, req)
+		if err != nil || meta.GetItem().GetTitle() != "Mario's Winter Run" || meta.GetItem().GetProviderId() != "0bNNs5GTru0" {
+			t.Errorf("%s: item = %+v, err = %v", name, meta.GetItem(), err)
+		}
+	}
+
+	// Nothing names a video: no answer, and YouTube is not asked for one.
+	before := fakeAPICalls.Load()
+	meta, err := s.GetMetadata(ctx, &pluginv1.GetMetadataRequest{ItemType: "episode", ProviderIds: series})
+	if err != nil || meta.GetItem() != nil {
+		t.Errorf("series ID alone: item = %+v, err = %v; want no answer", meta.GetItem(), err)
+	}
+	images, err := s.GetImages(ctx, &pluginv1.GetImagesRequest{ItemType: "episode", ProviderIds: series})
+	if err != nil || len(images.GetImages()) != 0 {
+		t.Errorf("series ID alone: images = %+v, err = %v; want none", images.GetImages(), err)
+	}
+	if asked := fakeAPICalls.Load() - before; asked != 0 {
+		t.Errorf("%d API calls for a lookup that names no video", asked)
 	}
 }
 

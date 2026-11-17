@@ -41,7 +41,10 @@ var (
 	// A video ID in brackets, as yt-dlp's "%(title)s [%(id)s]" writes it, or
 	// in a watch?v= / youtu.be URL.
 	videoTagRe = regexp.MustCompile(`(?i)\[(?:youtube-)?([` + idChars + `]{11})\]`)
-	videoURLRe = regexp.MustCompile(`(?:[?&]v=|youtu\.be/|/shorts/)([` + idChars + `]{11})(?:$|[^` + idChars + `])`)
+	// The same tag closing a file's name, before its extensions.
+	videoTagAtEndRe = regexp.MustCompile(`(?i)\[(?:youtube-)?([` + idChars + `]{11})\](?:\.[a-z0-9]{1,8})*$`)
+	videoIDRe       = regexp.MustCompile(`^[` + idChars + `]{11}$`)
+	videoURLRe      = regexp.MustCompile(`(?:[?&]v=|youtu\.be/|/shorts/)([` + idChars + `]{11})(?:$|[^` + idChars + `])`)
 
 	bracketTagRe = regexp.MustCompile(`\s*(?:\[[^\]]*\]|\{[^}]*\})`)
 	spaceRe      = regexp.MustCompile(`\s+`)
@@ -149,6 +152,32 @@ func ParseVideoID(text string) (string, bool) {
 	}
 	if m := videoTagRe.FindStringSubmatch(text); m != nil {
 		return m[1], true
+	}
+	return "", false
+}
+
+// IsVideoID reports whether id has the shape of a video ID: 11 characters.
+// A channel or playlist ID never does; the shortest is 12.
+func IsVideoID(id string) bool {
+	return videoIDRe.MatchString(id)
+}
+
+// VideoIDFromPath finds the video a downloaded file holds, from the ID that
+// yt-dlp and TubeSync put in brackets at the end of its name
+// ("2024-01-02 - Title [0bNNs5GTru0].mkv"). A tag closing the name is
+// taken first, then the last one in it: a title can hold an eleven-letter
+// word in brackets of its own ("[Compilation] Best Runs [0bNNs5GTru0]"), and
+// a folder can end in a tag too.
+func VideoIDFromPath(path string) (string, bool) {
+	name := path
+	if i := strings.LastIndexAny(name, `/\`); i >= 0 {
+		name = name[i+1:]
+	}
+	if m := videoTagAtEndRe.FindStringSubmatch(name); m != nil {
+		return m[1], true
+	}
+	if all := videoTagRe.FindAllStringSubmatch(name, -1); len(all) > 0 {
+		return all[len(all)-1][1], true
 	}
 	return "", false
 }

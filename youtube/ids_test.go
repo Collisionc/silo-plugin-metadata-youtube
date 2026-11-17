@@ -37,6 +37,39 @@ func TestParseRef(t *testing.T) {
 	}
 }
 
+func TestVideoIDFromPath(t *testing.T) {
+	cases := []struct {
+		path string
+		want string
+	}{
+		// TubeSync's and yt-dlp's names end in the video's ID.
+		{"/media/YouTube/Brain Break Land [UCA94TZluH5eQtkQpaCZQfRw]/2024-01-02 - Mario's Winter Run [0bNNs5GTru0].mkv", "0bNNs5GTru0"},
+		{`D:\YouTube\Brain Break Land\2024-01-02 - Run [0bNNs5GTru0].mp4`, "0bNNs5GTru0"},
+		{"2024-01-02 - Run [youtube-0bNNs5GTru0].mkv", "0bNNs5GTru0"},
+		{"2024-01-02 - Run [0bNNs5GTru0].en.srt", "0bNNs5GTru0"},
+		// A title's own brackets do not win over the ID that closes the name.
+		{"2019-05-01 - [Compilation] Best Runs [0bNNs5GTru0].mkv", "0bNNs5GTru0"},
+		{"2025-04-12 - Marble Survival S2 - E5 [Race 15 - 17] [_TZW4HHkF1s].mkv", "_TZW4HHkF1s"},
+		// An ID ahead of the title is still found.
+		{"[0bNNs5GTru0] Run.mkv", "0bNNs5GTru0"},
+		// The folder's tag is not the file's.
+		{"/media/Show [0bNNs5GTru0]/2024-01-02 - Run.mkv", ""},
+		{"2024-01-02 - Run.mkv", ""},
+		{"", ""},
+	}
+	for _, tc := range cases {
+		got, ok := VideoIDFromPath(tc.path)
+		if got != tc.want || ok != (tc.want != "") {
+			t.Errorf("VideoIDFromPath(%q) = %q, %v; want %q", tc.path, got, ok, tc.want)
+		}
+	}
+	for id, want := range map[string]bool{"0bNNs5GTru0": true, "_TZW4HHkF1s": true, "UCA94TZluH5eQtkQpaCZQfRw": false, "PLrpqCP1_qdKhShZPq": false, "": false, "0bNNs5GTru": false} {
+		if IsVideoID(id) != want {
+			t.Errorf("IsVideoID(%q) = %v", id, !want)
+		}
+	}
+}
+
 func TestRepairedRefs(t *testing.T) {
 	// One underscore: one candidate of the right length per spelling.
 	refs := RepairedRefs("Matthew Wood [UC8WBLj aquoUjJkXPXMC5aA]")
