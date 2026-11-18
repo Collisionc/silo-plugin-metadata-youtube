@@ -123,6 +123,23 @@ plugin caches listings for an hour and video details for a day.
 When the quota runs out, YouTube answers `quotaExceeded` until midnight
 Pacific time, and metadata calls fail until then.
 
+## What it logs
+
+The plugin writes its log lines as hclog JSON on stderr. Silo's plugin host
+passes such a line on to Silo's log at the level it names; a line in any
+other form is shown at debug level only, which Silo's log does not keep.
+
+- `youtube: started`, with the version, each time Silo starts the plugin
+  (Silo stops an idle plugin after 30 minutes).
+- `youtube: a lookup as Silo sent it`, or as a warning
+  `youtube: a lookup that found nothing, as Silo sent it`: the first two
+  lookups of each shape - which call, and which IDs and file path it carried -
+  while the plugin runs, with their values. Silo itself says only
+  `no metadata found from any provider` when a refresh fails; this shows what
+  the refresh sent.
+- `youtube: what Silo asked in 5 minutes`: the lookups of a busy spell,
+  counted by call and outcome.
+
 ## Development
 
 ```sh

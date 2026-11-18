@@ -9,12 +9,10 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"fmt"
-	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/types/known/structpb"
@@ -78,7 +76,7 @@ func (s *runtimeServer) Configure(_ context.Context, req *pluginv1.ConfigureRequ
 		if loaded, err := time.LoadLocation(zone); err == nil {
 			loc = loaded
 		} else {
-			slog.Warn("youtube: unknown time zone, using UTC", "timezone", zone, "error", err)
+			logger.Warn("youtube: unknown time zone, using UTC", "timezone", zone, "error", err)
 		}
 	}
 	p := provider.New(youtube.NewClient(youtubeBaseURL, apiKey, nil), loc,
@@ -104,8 +102,20 @@ type metadataServer struct {
 	runtime *runtimeServer
 }
 
-func (s *metadataServer) Search(ctx context.Context, req *pluginv1.SearchMetadataRequest) (*pluginv1.SearchMetadataResponse, error) {
-	response := &pluginv1.SearchMetadataResponse{}
+func (s *metadataServer) Search(ctx context.Context, req *pluginv1.SearchMetadataRequest) (response *pluginv1.SearchMetadataResponse, err error) {
+	defer func() {
+		outcome := outcomeOf(true, len(response.GetResults()), err)
+		if err == nil && req.GetItemType() != "series" {
+			outcome = notAnswered
+		}
+		query := "query:set"
+		if strings.TrimSpace(req.GetQuery()) == "" {
+			query = "query:none"
+		}
+		lookups.note("Search/"+req.GetItemType(), outcome, query+" ids:"+idShape(ownID(req.GetProviderIds())),
+			"query", req.GetQuery(), "year", req.GetYear(), "provider_ids", idsText(req.GetProviderIds()), "answers", len(response.GetResults()))
+	}()
+	response = &pluginv1.SearchMetadataResponse{}
 	if req.GetItemType() != "series" {
 		return response, nil
 	}
@@ -140,11 +150,31 @@ func (s *metadataServer) Search(ctx context.Context, req *pluginv1.SearchMetadat
 	return response, nil
 }
 
-func (s *metadataServer) GetMetadata(ctx context.Context, req *pluginv1.GetMetadataRequest) (*pluginv1.GetMetadataResponse, error) {
+func (s *metadataServer) GetMetadata(ctx context.Context, req *pluginv1.GetMetadataRequest) (response *pluginv1.GetMetadataResponse, err error) {
+	itemType := req.GetItemType()
 	id := providerID(req.GetProviderIds(), req.GetProviderId())
-	if req.GetItemType() == "episode" {
+	if itemType == "episode" {
 		id = episodeVideoID(req.GetProviderIds(), req.GetProviderId(), req.GetFilePath())
 	}
+	defer func() {
+		answers := 0
+		if response.GetItem() != nil {
+			answers = 1
+		}
+		outcome := outcomeOf(id != "", answers, err)
+		switch {
+		case err != nil:
+		case itemType == "season":
+			outcome = noSeasons // Silo counts it a failed refresh; GetSeasons is where seasons come from
+		case itemType != "series" && itemType != "episode":
+			outcome = notAnswered
+		case id == "" && itemType == "episode":
+			outcome = noVideoID
+		}
+		lookups.note("GetMetadata/"+itemType, outcome,
+			"provider_id:"+idShape(req.GetProviderId())+" ids:"+idShape(ownID(req.GetProviderIds()))+" file:"+pathShape(req.GetFilePath()),
+			"provider_id", req.GetProviderId(), "provider_ids", idsText(req.GetProviderIds()), "file_path", req.GetFilePath(), "language", req.GetLanguage())
+	}()
 	if id == "" {
 		return &pluginv1.GetMetadataResponse{}, nil
 	}
@@ -186,19 +216,15 @@ func (s *metadataServer) GetMetadata(ctx context.Context, req *pluginv1.GetMetad
 	return &pluginv1.GetMetadataResponse{}, nil
 }
 
-// unidentified counts the episode lookups that named no video.
-var unidentified atomic.Int64
-
 // episodeVideoID picks the video an episode lookup is about. Silo keeps a
 // provider's ID for a series but not for an episode, so the lookup can arrive
 // with the series' ID or with none; the file names its own video
 // ("... [0bNNs5GTru0].mkv"). An ID that is not a video's is never sent to
-// YouTube as one: that would spend a quota unit to find nothing. The first
-// few lookups that name no video are logged with what they carried, so
-// Silo's log shows what its refresh sends.
+// YouTube as one: that would spend a quota unit to find nothing. A lookup
+// that names no video is logged by its caller (lookupLog), with what it
+// carried.
 func episodeVideoID(ids *structpb.Struct, fallback, filePath string) string {
-	own := stringMap(ids)[provider.ProviderKey]
-	for _, candidate := range []string{own, strings.TrimSpace(fallback)} {
+	for _, candidate := range []string{ownID(ids), strings.TrimSpace(fallback)} {
 		if youtube.IsVideoID(candidate) {
 			return candidate
 		}
@@ -206,10 +232,12 @@ func episodeVideoID(ids *structpb.Struct, fallback, filePath string) string {
 	if id, ok := youtube.VideoIDFromPath(filePath); ok {
 		return id
 	}
-	if unidentified.Add(1) <= 3 {
-		slog.Warn("youtube: an episode lookup names no video", "provider_id", fallback, "youtube_id", own, "file_path", filePath)
-	}
 	return ""
+}
+
+// ownID is this provider's ID among a lookup's provider IDs.
+func ownID(ids *structpb.Struct) string {
+	return stringMap(ids)[provider.ProviderKey]
 }
 
 func seriesItem(detail *provider.SeriesDetail) (*pluginv1.MetadataItem, error) {
@@ -248,9 +276,14 @@ func (s *metadataServer) GetPersonDetail(context.Context, *pluginv1.GetPersonDet
 	return &pluginv1.GetPersonDetailResponse{}, nil
 }
 
-func (s *metadataServer) GetSeasons(ctx context.Context, req *pluginv1.GetSeasonsRequest) (*pluginv1.GetSeasonsResponse, error) {
+func (s *metadataServer) GetSeasons(ctx context.Context, req *pluginv1.GetSeasonsRequest) (response *pluginv1.GetSeasonsResponse, err error) {
 	id := providerID(req.GetProviderIds(), req.GetSeriesProviderId())
-	response := &pluginv1.GetSeasonsResponse{}
+	defer func() {
+		lookups.note("GetSeasons", outcomeOf(id != "", len(response.GetSeasons()), err),
+			"series:"+idShape(req.GetSeriesProviderId())+" ids:"+idShape(ownID(req.GetProviderIds())),
+			"series_provider_id", req.GetSeriesProviderId(), "provider_ids", idsText(req.GetProviderIds()), "answers", len(response.GetSeasons()))
+	}()
+	response = &pluginv1.GetSeasonsResponse{}
 	if id == "" {
 		return response, nil
 	}
@@ -285,9 +318,19 @@ func seasonProviderID(seriesID string, season int) string {
 	return seriesID + "/" + strconv.Itoa(season)
 }
 
-func (s *metadataServer) GetEpisodes(ctx context.Context, req *pluginv1.GetEpisodesRequest) (*pluginv1.GetEpisodesResponse, error) {
+func (s *metadataServer) GetEpisodes(ctx context.Context, req *pluginv1.GetEpisodesRequest) (response *pluginv1.GetEpisodesResponse, err error) {
 	id := providerID(req.GetProviderIds(), req.GetSeriesProviderId())
-	response := &pluginv1.GetEpisodesResponse{}
+	defer func() {
+		season := "season:set"
+		if req.GetSeasonNumber() == 0 {
+			season = "season:zero"
+		}
+		lookups.note("GetEpisodes", outcomeOf(id != "", len(response.GetEpisodes()), err),
+			"series:"+idShape(req.GetSeriesProviderId())+" ids:"+idShape(ownID(req.GetProviderIds()))+" "+season,
+			"series_provider_id", req.GetSeriesProviderId(), "provider_ids", idsText(req.GetProviderIds()),
+			"season_number", req.GetSeasonNumber(), "answers", len(response.GetEpisodes()))
+	}()
+	response = &pluginv1.GetEpisodesResponse{}
 	if id == "" {
 		return response, nil
 	}
@@ -319,9 +362,28 @@ func (s *metadataServer) GetEpisodes(ctx context.Context, req *pluginv1.GetEpiso
 	return response, nil
 }
 
-func (s *metadataServer) GetImages(ctx context.Context, req *pluginv1.GetImagesRequest) (*pluginv1.GetImagesResponse, error) {
+func (s *metadataServer) GetImages(ctx context.Context, req *pluginv1.GetImagesRequest) (response *pluginv1.GetImagesResponse, err error) {
 	id := providerID(req.GetProviderIds(), req.GetProviderId())
-	response := &pluginv1.GetImagesResponse{}
+	defer func() {
+		outcome := outcomeOf(id != "", len(response.GetImages()), err)
+		season := "season:unset"
+		if req.SeasonNumber != nil {
+			season = "season:set"
+		}
+		switch {
+		case err != nil || id == "":
+		case strings.Contains(id, "/"), req.GetItemType() == "series" && req.SeasonNumber != nil:
+			outcome = notAnswered // seasons have no art of their own
+		case req.GetItemType() == "episode" && !youtube.IsVideoID(id):
+			outcome = noVideoID
+		case req.GetItemType() != "series" && req.GetItemType() != "episode":
+			outcome = notAnswered
+		}
+		lookups.note("GetImages/"+req.GetItemType(), outcome,
+			"provider_id:"+idShape(req.GetProviderId())+" ids:"+idShape(ownID(req.GetProviderIds()))+" "+season,
+			"provider_id", req.GetProviderId(), "provider_ids", idsText(req.GetProviderIds()), "answers", len(response.GetImages()))
+	}()
+	response = &pluginv1.GetImagesResponse{}
 	if id == "" || strings.Contains(id, "/") {
 		return response, nil // no lookup, or a season: seasons have no art of their own
 	}
@@ -425,6 +487,9 @@ func main() {
 		panic(err)
 	}
 	rs := &runtimeServer{manifest: manifest}
+	// One line per start: it shows in Silo's log that this build runs and
+	// that the plug-in's lines reach that log.
+	logger.Info("youtube: started", "version", manifest.GetVersion())
 	runtime.Serve(runtime.ServeConfig{
 		Servers: runtime.CapabilityServers{
 			Runtime:          rs,
