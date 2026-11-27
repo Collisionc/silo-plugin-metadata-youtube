@@ -34,7 +34,9 @@ the folder name. The plugin looks for, in order:
    `[UCxxxx]`, or a `/channel/UCxxxx` URL, so
    `BrainBreakLand [UCA94TZluH5eQtkQpaCZQfRw]` and
    `Brain Break Land [youtube-UCA94TZluH5eQtkQpaCZQfRw]` both work;
-3. an `@handle`, alone or in a `youtube.com/@handle` URL;
+3. an `@handle`: alone, in a `youtube.com/@handle` URL, or in a tag,
+   `Danny Go [@dannygo]`. A word after an `@` elsewhere in a name is not
+   taken for one;
 4. otherwise a YouTube channel search for the folder name without its
    bracketed tags (100 quota units), offering the top five channels.
 

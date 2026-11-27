@@ -40,8 +40,15 @@ var (
 	// PL is too likely to be part of a title.
 	playlistTagRe = regexp.MustCompile(`(?i)[\[\{\(](?:` + tagPrefix + `)?((?:PL|UU|FL|LP|RD|OL)[` + idChars + `]{10,48})[\]\}\)]`)
 	playlistURLRe = regexp.MustCompile(`[?&]list=((?:PL|UU|FL|LP|RD|OL)[` + idChars + `]{10,48})`)
-	// An @handle on its own, after a space, or in a youtube.com/@handle URL.
-	handleRe = regexp.MustCompile(`(?:^|[\s/])@([A-Za-z0-9._-]{3,30})(?:$|[\s/?#])`)
+	// An @handle that is all of the text, as typed into Silo's Match; one in
+	// a youtube.com/@handle URL; or one in a tag, [@handle] or {@handle}. Not
+	// any word after an "@" in a folder's name: "Mark Rober @home" is not
+	// the channel @home.
+	handleRes = []*regexp.Regexp{
+		regexp.MustCompile(`^\s*@([A-Za-z0-9._-]{3,30})\s*$`),
+		regexp.MustCompile(`(?i)youtube\.com/@([A-Za-z0-9._-]{3,30})(?:$|[\s/?#])`),
+		regexp.MustCompile(`[\[\{]\s*@([A-Za-z0-9._-]{3,30})\s*[\]\}]`),
+	}
 	// A video ID in square brackets, as yt-dlp's "%(title)s [%(id)s]" writes
 	// it, or in curly ones, with or without a prefix: [0bNNs5GTru0],
 	// {0bNNs5GTru0}, [youtube-0bNNs5GTru0], {yt-0bNNs5GTru0}.
@@ -73,8 +80,10 @@ func ParseRef(text string) (Ref, bool) {
 	if m := channelIDRe.FindStringSubmatch(text); m != nil {
 		return Ref{Kind: RefChannel, ID: m[1]}, true
 	}
-	if m := handleRe.FindStringSubmatch(text); m != nil {
-		return Ref{Kind: RefHandle, ID: m[1]}, true
+	for _, re := range handleRes {
+		if m := re.FindStringSubmatch(text); m != nil {
+			return Ref{Kind: RefHandle, ID: m[1]}, true
+		}
 	}
 	return Ref{}, false
 }

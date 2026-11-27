@@ -33,6 +33,16 @@ func TestParseRef(t *testing.T) {
 		{"Brain Break Land", Ref{}, false},
 		{"PLAYGROUND_ADVENTURES_FOREVER_AND_EVER", Ref{}, false},
 		{"Matthew Wood (PE & Brain Breaks)", Ref{}, false},
+		{"  @brainbreakland ", Ref{RefHandle, "brainbreakland"}, true},
+		{"Brain Break Land [@brainbreakland]", Ref{RefHandle, "brainbreakland"}, true},
+		{"Brain Break Land {@brainbreakland}", Ref{RefHandle, "brainbreakland"}, true},
+		{"youtube.com/@dannygo/videos", Ref{RefHandle, "dannygo"}, true},
+		// A word after "@" in a name is the name's own, not a channel.
+		{"Mark Rober @home", Ref{}, false},
+		{"Tom Scott plus @tomscottgo extras", Ref{}, false},
+		{"Working (@home)", Ref{}, false},
+		{"Live @ The Apollo", Ref{}, false},
+		{"https://example.com/@dannygo", Ref{}, false},
 		{"name@example.com", Ref{}, false},
 	}
 	for _, tc := range cases {
