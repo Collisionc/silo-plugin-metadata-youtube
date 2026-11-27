@@ -60,8 +60,9 @@ func (c *Client) HasKey() bool { return c != nil && c.apiKey != "" }
 // ErrNoAPIKey is returned by every call when no API key is configured.
 var ErrNoAPIKey = errors.New("youtube: no API key configured (Admin > Plugins > YouTube Metadata)")
 
-// ErrRequestFailed marks a call that got no answer from the API: the
-// connection failed or broke off. Trying again later can help.
+// ErrRequestFailed marks a call that got no usable answer from the API: the
+// connection failed or broke off, or what came back was not the API's JSON
+// (a proxy's error page, a body cut short). Trying again later can help.
 var ErrRequestFailed = errors.New("youtube: request failed")
 
 // APIError is a non-2xx answer from the API.
@@ -196,7 +197,7 @@ func (c *Client) do(ctx context.Context, endpoint string, dest any) error {
 		return fmt.Errorf("%w: reading response: %w", ErrRequestFailed, err)
 	}
 	if len(body) > maxResponseBody {
-		return fmt.Errorf("youtube: response larger than %d bytes", maxResponseBody)
+		return fmt.Errorf("%w: response larger than %d bytes", ErrRequestFailed, maxResponseBody)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		apiErr := &APIError{Status: resp.StatusCode, Message: http.StatusText(resp.StatusCode)}
@@ -215,7 +216,7 @@ func (c *Client) do(ctx context.Context, endpoint string, dest any) error {
 		return apiErr
 	}
 	if err := json.Unmarshal(body, dest); err != nil {
-		return fmt.Errorf("youtube: decoding response: %w", err)
+		return fmt.Errorf("%w: decoding response: %w", ErrRequestFailed, err)
 	}
 	return nil
 }

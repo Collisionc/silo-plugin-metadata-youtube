@@ -31,6 +31,7 @@ func TestStatusCodesSiloRetriesBy(t *testing.T) {
 		"rate limit":    {&youtube.APIError{Status: 429}, codes.ResourceExhausted},
 		"outage":        {&youtube.APIError{Status: 503}, codes.Unavailable},
 		"no answer":     {fmt.Errorf("%w: dial tcp: no such host", youtube.ErrRequestFailed), codes.Unavailable},
+		"not JSON":      {fmt.Errorf("%w: decoding response: unexpected <", youtube.ErrRequestFailed), codes.Unavailable},
 		"still listing": {fmt.Errorf("%w (listing)", provider.ErrStillWorking), codes.Unavailable},
 		"no key":        {youtube.ErrNoAPIKey, codes.FailedPrecondition},
 		"bad key":       {&youtube.APIError{Status: 400, Message: "API key not valid."}, codes.FailedPrecondition},

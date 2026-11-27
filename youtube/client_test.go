@@ -55,3 +55,24 @@ func TestUnreachableAPIIsARequestFailure(t *testing.T) {
 		t.Fatalf("err = %v, want ErrRequestFailed", err)
 	}
 }
+
+// An answer that is not the API's JSON, such as a proxy's error page, is no
+// answer: it is asked again, and then reported as a failed request, which
+// Silo retries. Reported as anything else it counts as permanent, and three
+// of those park a folder.
+func TestUnreadableAnswerIsARequestFailure(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = w.Write([]byte("<html><body>502 Bad Gateway</body></html>"))
+	}))
+	t.Cleanup(server.Close)
+	client := NewClient(server.URL, "k", server.Client())
+	client.backoff = func(int) time.Duration { return 0 }
+	if err := client.CheckKey(context.Background()); !errors.Is(err, ErrRequestFailed) {
+		t.Fatalf("err = %v, want ErrRequestFailed", err)
+	}
+	if calls != maxAttempts {
+		t.Errorf("%d requests, want %d", calls, maxAttempts)
+	}
+}
