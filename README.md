@@ -173,10 +173,9 @@ channel.
 ## IMDb IDs
 
 YouTube has no IMDb IDs, but some channels are shows that IMDb lists, and
-other plugins (ratings, watch sync, OMDb) find an entry by its IMDb ID.
-There are three ways to give an entry one: a tag you write, which is
-certain, and two lookups the **IMDb IDs** setting turns on, both off by
-default.
+other plugins (ratings, watch sync) find an entry by its IMDb ID. The plugin
+looks none up. You say which IMDb title a channel is, in one of two places
+Silo reads itself:
 
 **A tag in the name.** Put `{imdb-tt…}` beside the YouTube ID:
 
@@ -188,106 +187,40 @@ Videos/
   Another Fan Film {yt-dQw4w9WgXcQ} {imdb-tt7654321}/Another Fan Film.mkv
 ```
 
-Silo reads the imdb tag itself, sends its ID with the search, and then
-accepts only an answer that carries that ID. The plugin gives it to the
-channel, playlist or video the name identifies by ID, handle or URL, so the
-entry holds both IDs, and the match needs no year. A name with an imdb tag
-and nothing that identifies the channel or video is not matched: a search by
-title cannot say which result the IMDb ID belongs to.
+**A `tvshow.nfo` in the folder**, with `<uniqueid type="imdb">tt…</uniqueid>`
+and the library's **NFO Files** provider enabled above YouTube. It does the
+tag's job without renaming the folder, and a downloader can write it.
+
+Either way Silo sends the ID with its search and then accepts only an answer
+that carries it. The plugin gives it to the channel, playlist or video the
+name identifies by ID, handle or URL, so the entry holds both IDs, and the
+match needs no year. A name with an IMDb ID and nothing that identifies the
+channel or video is not matched: a search by title cannot say which result
+the IMDb ID belongs to.
 
 On a movie's **folder**, an imdb tag makes Silo take the title from the
 folder, not the file. The YouTube ID then goes on the folder too, before any
 year, as in the third example.
 
-In a movie library that also uses a provider working from IMDb IDs, such as
-[OMDb](https://github.com/neilmc78/silo-plugin-metadata-omdb), both answers
-carry the same IMDb ID, which is how Silo knows they are one film.
+### Only the channel's own title
 
-**Wikidata.** Set **IMDb IDs** to **Look up on Wikidata** and the plugin
-asks [Wikidata](https://www.wikidata.org), when it loads a series, whether
-an IMDb title lists that channel (or playlist) as its own, and fills the ID
-into the entry. It needs no key and costs no YouTube quota; the answer is
-kept for a week. Each request goes to `query.wikidata.org` and names the
-channel, which is why the setting is off by default. Wikidata refuses a
-client that asks too fast (HTTP 429): the plugin asks once more after a
-short wait, and after a longer one leaves the series without an IMDb ID
-until its next refresh.
+To Silo an IMDb ID says **which title a folder is**, and it keeps one entry
+per ID. Give a channel the ID of a title you also have, such as BattleBots'
+channel beside the BattleBots TV show, and Silo treats the two as one:
 
-- Wikidata has both IDs for about 3,200 titles (November 2026), so most
-  channels get none.
-- When several titles list one channel, as with a network's channel, none
-  is used.
-- A TV show's official channel gets the show's IMDb ID: Saturday Night
-  Live's channel gets `tt0072562`. Other plugins then treat the channel as
-  the show. If the show itself is in one of your libraries, the channel
-  cannot have the ID: see
-  [When another title holds the ID](#when-another-title-holds-the-id).
-- An entry that already has an IMDb ID keeps it.
+- when it matches the folder (a new folder, or a complete refresh of an
+  entry), it attaches the folder's files to the entry that holds the ID.
+  They are moved back with **Split Versions** on that entry;
+- when it refreshes an entry it has matched, it refuses the refresh and says
+  `refusing to merge matched items` in its log.
 
-**OMDb, by the channel's name.** Set **IMDb IDs** to **Search OMDb by
-channel name** (or **Wikidata, then OMDb**) and enter an **OMDb API key**; a
-free one from [omdbapi.com](https://www.omdbapi.com/apikey.aspx) allows
-1,000 requests a day. [OMDb](https://www.omdbapi.com/) is built from IMDb's
-data and knows nothing of YouTube, so this is a match by name, a guess that
-Wikidata's lookup by channel ID is not. The plugin takes an IMDb ID only
-when:
+So tag a channel only when the IMDb title is the channel itself, a show made
+for YouTube. The official channel of a TV show is not the show.
 
-- exactly one series on the first page of OMDb's search has the channel's
-  name, compared by letters and digits alone (`DEATH BATTLE!` is
-  `Death Battle`);
-- that series began no earlier than the year before the channel was
-  created, so a channel that happens to be called `Friends` does not get
-  the 1994 show's ID.
-
-Several series of the name, or none, give no ID. Playlists are not searched
-for. A channel costs one OMDb request a week, and the search sends the
-channel's name to OMDb. Every search writes a line to Silo's log saying what
-it found (`youtube: OMDb lists one series named as the channel…`), with the
-series' title, year and IMDb ID: check the first ones against IMDb, since a
-wrong ID only shows in what other plugins then do with the entry.
-
-A wrong ID is not corrected by turning the setting off: an entry keeps the
-IMDb ID it has, and the plugin never removes or replaces one. It has to be
-changed in Silo.
-
-### When another title holds the ID
-
-Silo keeps one entry per IMDb ID, and takes an IMDb ID as saying which title
-a folder is. So a lookup that finds, for a channel, the ID of a title you
-also have (BattleBots' channel beside the BattleBots TV show) is a hazard,
-and the plugin cannot see what else your libraries hold. **If you keep TV
-shows and their channels on one server, leave IMDb IDs off and tag the
-folders you want.**
-
-The plugin fills a looked-up ID in only when Silo refreshes an entry it has
-already matched, never while Silo is matching a folder (a new folder, or a
-complete refresh of an entry, which matches its folder again). During a
-match Silo would attach the folder to the title that holds the ID: a
-channel's files end up under the TV show, and are moved back with **Split
-Versions** on the show. Choosing a channel by hand with **Match** is not
-protected in this way.
-
-In a refresh, Silo cannot give the ID to both entries. It refuses that
-refresh of the channel and says so in its log:
-
-```
-refusing to merge matched items series-tvdb-71028 and series-imdb-tt0259128: both have files or library memberships
-```
-
-The plugin notices: it records each ID it fills in, in the state Silo keeps
-for the plugin, and when Silo asks about the series again more than five
-minutes later and the entry still has no IMDb ID, it stops offering that ID
-to that series, for good. So one refresh of the channel fails, and the next
-one, without the ID, goes through. The plugin's own line in Silo's log names
-the series and the ID:
-
-```
-youtube: Silo did not keep the IMDb ID filled into a series' entry, so another title holds it or it was removed; it is not filled in again
-```
-
-The same holds for an IMDb ID you remove from an entry in Silo: the plugin
-does not put it back. An `{imdb-tt…}` tag in the folder's name is not held
-back in this way; it is offered on every scan.
+Until version 0.4.0 the plugin could look IDs up on Wikidata and OMDb. Both
+mostly answer with a TV show's ID for its official channel, and that is how
+the BattleBots case above happened, so the lookups are gone. An entry keeps
+the IMDb ID it has; a wrong one is changed in Silo.
 
 ## Setup
 
@@ -306,8 +239,7 @@ back in this way; it is offered on every scan.
    season per year or one season; **Backdrop** chooses the series background
    art: none (the default, as banners and thumbnails carry lettering that
    makes the description hard to read), the channel banner, or the newest
-   video's thumbnail. **IMDb IDs** can fill in a channel's IMDb ID from
-   Wikidata or OMDb (see [IMDb IDs](#imdb-ids)). **Check Connection** tries the key
+   video's thumbnail. **Check Connection** tries the key
    with one call (1 quota unit) and says what to fix if YouTube refuses it.
 4. Keep the channels in a TV library of their own, and in that library
    enable **YouTube** as the only series metadata provider: turn TVDB and TMDB

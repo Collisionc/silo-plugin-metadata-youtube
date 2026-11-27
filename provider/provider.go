@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"math"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -16,7 +17,6 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/collisionc/silo-plugin-metadata-youtube/wikidata"
 	"github.com/collisionc/silo-plugin-metadata-youtube/youtube"
 )
 
@@ -69,90 +69,6 @@ type Provider struct {
 	videos   map[string]cached[youtube.Video]
 	// searches holds the channel IDs a free-text search found, by query.
 	searches map[string]cached[[]string]
-
-	// imdbLookup finds a channel's or playlist's IMDb title; nil when the
-	// lookup is off. imdb holds its answers, "" for none, by YouTube ID.
-	imdbLookup IMDbLookup
-	imdb       map[string]cached[string]
-}
-
-// IMDbSubject is the channel or playlist an IMDb lookup is asked about.
-type IMDbSubject struct {
-	// ID is the channel's ID (UC...) or the playlist's.
-	ID   string
-	Kind youtube.RefKind // RefChannel or RefPlaylist
-	// Name is the channel's name, or the playlist's title.
-	Name string
-	// Created is the year the channel was created; 0 for a playlist or when
-	// YouTube does not say.
-	Created int
-}
-
-// IMDbLookup finds the IMDb title ID (tt...) of a YouTube channel or
-// playlist; "" when there is none.
-type IMDbLookup func(ctx context.Context, subject IMDbSubject) (string, error)
-
-// FirstIMDb asks lookups in turn and returns the first ID found. When none
-// finds one and one of them failed, it returns that failure, so the answer
-// is not taken for "there is none".
-func FirstIMDb(lookups ...IMDbLookup) IMDbLookup {
-	return func(ctx context.Context, subject IMDbSubject) (string, error) {
-		var failed error
-		for _, lookup := range lookups {
-			imdb, err := lookup(ctx, subject)
-			if err != nil {
-				failed = errors.Join(failed, err)
-				continue
-			}
-			if imdb != "" {
-				return imdb, nil
-			}
-		}
-		return "", failed
-	}
-}
-
-// imdbTTL is how long a lookup's answer is kept, a missing one too: what
-// Wikidata and OMDb record about a channel changes rarely.
-const (
-	imdbTTL       = 7 * 24 * time.Hour
-	maxCachedIMDb = 2000
-)
-
-// WithIMDbLookup makes series carry the IMDb title ID lookup finds for them.
-func WithIMDbLookup(lookup IMDbLookup) Option { return func(p *Provider) { p.imdbLookup = lookup } }
-
-// IMDbID returns the IMDb title ID of a series: of the channel for a channel
-// or its uploads playlist, of the playlist otherwise. It is "" when the
-// lookup is off or finds none. A failed lookup is an error and is not kept;
-// the caller can carry on without the ID.
-func (p *Provider) IMDbID(ctx context.Context, series *Series) (string, error) {
-	if p.imdbLookup == nil || series == nil {
-		return "", nil
-	}
-	subject := IMDbSubject{ID: series.ID, Kind: series.Kind, Name: series.Title}
-	if channel := channelForUploads(series.ID); channel != "" {
-		// A channel's uploads playlist is the channel.
-		subject = IMDbSubject{ID: channel, Kind: youtube.RefChannel, Name: series.ChannelName}
-	}
-	if subject.Kind == youtube.RefChannel && !series.Published.IsZero() {
-		subject.Created = series.Published.Year()
-	}
-	now := p.now()
-	p.mu.Lock()
-	entry, ok := p.imdb[subject.ID]
-	p.mu.Unlock()
-	if ok && !now.After(entry.expires) {
-		return entry.value, nil
-	}
-	imdb, err := p.imdbLookup(ctx, subject)
-	if err != nil {
-		return "", err
-	}
-	p.mu.Lock()
-	put(p.imdb, subject.ID, imdb, now, now.Add(imdbTTL), maxCachedIMDb)
-	p.mu.Unlock()
-	return imdb, nil
 }
 
 type cached[T any] struct {
@@ -226,7 +142,6 @@ func New(client *youtube.Client, loc *time.Location, options ...Option) *Provide
 		listings: make(map[string]cached[[]NumberedUpload]),
 		videos:   make(map[string]cached[youtube.Video]),
 		searches: make(map[string]cached[[]string]),
-		imdb:     make(map[string]cached[string]),
 	}
 	for _, option := range options {
 		option(p)
@@ -270,6 +185,9 @@ type SearchHit struct {
 // IMDbKey is the provider-ID key Silo keeps an item's IMDb title ID under.
 const IMDbKey = "imdb"
 
+// An IMDb title ID. People (nm...) and companies (co...) are not titles.
+var imdbTitleIDRe = regexp.MustCompile(`^tt[0-9]{7,10}$`)
+
 // claimed gives the first hit, the series or video a search named outright,
 // the IMDb title ID Silo sent with the search: one it read from the folder's
 // name ("Channel {imdb-tt1234567} {yt-UC...}") or already keeps for the item.
@@ -279,7 +197,7 @@ const IMDbKey = "imdb"
 // them it belongs to.
 func claimed(hits []SearchHit, providerIDs map[string]string) []SearchHit {
 	imdb := strings.ToLower(strings.TrimSpace(providerIDs[IMDbKey]))
-	if len(hits) > 0 && wikidata.IsTitleID(imdb) {
+	if len(hits) > 0 && imdbTitleIDRe.MatchString(imdb) {
 		hits[0].IMDbID = imdb
 	}
 	return hits
