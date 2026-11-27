@@ -100,8 +100,11 @@ otherwise a video uploaded near midnight links to no episode.
    a good idea.
 2. Install the plugin: download the binary for your server's platform from the
    [releases](../../releases) (`plugin-linux-amd64` for most servers) and
-   upload it under **Admin > Plugins**. To build it yourself:
-   `make build-all`.
+   upload it under **Admin > Plugins**. Each release binary carries a signed
+   build provenance attestation; to check that a download was built by this
+   repository's release workflow:
+   `gh attestation verify plugin-linux-amd64 --repo Collisionc/silo-plugin-metadata-youtube`.
+   To build it yourself: `make build-all`.
 3. Under the plugin's settings, enter the API key. **Seasons** chooses a
    season per year or one season; **Backdrop** chooses the series background
    art: none (the default, as banners and thumbnails carry lettering that

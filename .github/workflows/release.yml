@@ -3,6 +3,12 @@ name: Release
 # Pushing a v* tag builds the plugin for every platform in manifest.json and
 # publishes a GitHub release with the binaries, their checksums and a manifest
 # per platform. Install one in Silo with Admin > Plugins > Upload.
+#
+# Each binary also gets a signed build provenance attestation: who built it,
+# from which commit, with this workflow. Check a download with
+#   gh attestation verify plugin-linux-amd64 --repo Collisionc/silo-plugin-metadata-youtube
+# The checksums only show a download is complete; the attestation shows where
+# it came from.
 
 on:
   push:
@@ -10,8 +16,12 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: write     # the release
+  id-token: write     # signing the attestations
+  attestations: write # storing them
 
+# Actions are pinned to a release's commit, not its tag: a tag can be moved to
+# other code later, a commit cannot. The comment names the release.
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -19,9 +29,11 @@ jobs:
       GOWORK: off
       CGO_ENABLED: '0'
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
 
@@ -45,8 +57,13 @@ jobs:
             jq --arg v "$version" --arg c "$checksum" '.version = $v | .checksum = $c' manifest.json > "dist/manifest-${goos}-${goarch}.json"
           done
 
+      - name: Attest
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/plugin-*
+
       - name: Publish
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: dist/*
           generate_release_notes: true
