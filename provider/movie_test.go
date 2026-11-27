@@ -2,8 +2,11 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
+
+	"github.com/collisionc/silo-plugin-metadata-youtube/youtube"
 )
 
 // A video kept as a movie is found by the ID in its title, as Silo read it
@@ -121,6 +124,139 @@ func TestMovieDatesInTheConfiguredZone(t *testing.T) {
 	}
 	if gone, err := p.Movie(context.Background(), "deleted1234"); err != nil || gone != nil {
 		t.Errorf("a deleted video: movie = %+v, err = %v", gone, err)
+	}
+}
+
+// A folder tagged with an IMDb ID beside the channel's ("Channel
+// {imdb-tt4031218} {yt-UC...}"): Silo sends the IMDb ID with the search and
+// then accepts only a candidate carrying it. What the search named outright
+// carries it; nothing else does.
+func TestSearchCarriesTheIMDbIDSiloSent(t *testing.T) {
+	p, _ := newTestProvider(t)
+	ctx := context.Background()
+	sent := map[string]string{IMDbKey: " TT4031218 "}
+
+	for _, query := range []string{
+		"Brain Break Land {yt-" + channelID + "}",
+		"https://www.youtube.com/@brainbreakland",
+		"https://youtu.be/0bNNs5GTru0",
+		"Matthew Wood [UC8WBLj aquoUjJkXPXMC5aA]",
+	} {
+		hits, err := p.Search(ctx, query, sent)
+		if err != nil || len(hits) != 2 || hits[0].IMDbID != "tt4031218" || hits[1].IMDbID != "" {
+			t.Errorf("%q: hits = %+v, err = %v; want the IMDb ID on the first hit only", query, hits, err)
+		}
+	}
+	// The item's stored YouTube ID names it too.
+	hits, err := p.Search(ctx, "anything", map[string]string{ProviderKey: playlistID, IMDbKey: "tt4031218"})
+	if err != nil || len(hits) != 1 || hits[0].IMDbID != "tt4031218" {
+		t.Errorf("stored ID: hits = %+v, err = %v", hits, err)
+	}
+	// A search by title names nothing: which channel the ID belongs to is
+	// anyone's guess.
+	hits, err = p.Search(ctx, "Brain Break Land", sent)
+	if err != nil || len(hits) != 1 || hits[0].IMDbID != "" {
+		t.Errorf("by title: hits = %+v, err = %v; want no IMDb ID", hits, err)
+	}
+	// No ID sent, or something that is not an IMDb title ID: none carried.
+	for _, ids := range []map[string]string{nil, {IMDbKey: "nm0000001"}, {IMDbKey: "tt12"}} {
+		hits, err = p.Search(ctx, "Brain Break Land {yt-"+channelID+"}", ids)
+		if err != nil || len(hits) != 2 || hits[0].IMDbID != "" {
+			t.Errorf("ids %v: hits = %+v, err = %v; want no IMDb ID", ids, hits, err)
+		}
+	}
+	// A movie named by its video ID carries it the same way.
+	hits, err = p.SearchMovies(ctx, "Fan Film [0bNNs5GTru0]", sent)
+	if err != nil || len(hits) != 1 || hits[0].IMDbID != "tt4031218" {
+		t.Errorf("movie: hits = %+v, err = %v", hits, err)
+	}
+}
+
+// The IMDb lookup is asked once a week per channel, a miss too; a failure is
+// not kept. A channel's uploads playlist is the channel.
+func TestIMDbIDIsLookedUpOnceAWeek(t *testing.T) {
+	p, _ := newTestProvider(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	p.now = func() time.Time { return now }
+
+	channel := &Series{ID: channelID, Kind: youtube.RefChannel}
+	if imdb, err := p.IMDbID(ctx, channel); err != nil || imdb != "" {
+		t.Errorf("lookup off: %q, %v", imdb, err)
+	}
+
+	var asked []string
+	var subjects []IMDbSubject
+	fail := false
+	p.imdbLookup = func(_ context.Context, subject IMDbSubject) (string, error) {
+		asked = append(asked, subject.ID)
+		subjects = append(subjects, subject)
+		if fail {
+			return "", errors.New("wikidata is down")
+		}
+		if subject.ID == channelID {
+			return "tt4031218", nil
+		}
+		return "", nil
+	}
+	created := time.Date(2021, 5, 1, 0, 0, 0, 0, time.UTC)
+	channel = &Series{ID: channelID, Kind: youtube.RefChannel, Title: "Brain Break Land", Published: created}
+	uploads := &Series{ID: uploadsID, Kind: youtube.RefPlaylist, Title: "Uploads from Brain Break Land", ChannelID: channelID, ChannelName: "Brain Break Land", Published: created}
+	playlist := &Series{ID: playlistID, Kind: youtube.RefPlaylist, Title: "Fitness Runs", ChannelID: channelID, ChannelName: "Brain Break Land", Published: created}
+	// The uploads playlist is asked about as its channel: the channel's ID,
+	// name and year. A playlist has no year: it can be newer than its show.
+	if _, err := p.IMDbID(ctx, uploads); err != nil || len(subjects) != 1 ||
+		subjects[0] != (IMDbSubject{ID: channelID, Kind: youtube.RefChannel, Name: "Brain Break Land", Created: 2021}) {
+		t.Errorf("uploads playlist: asked about %+v, err = %v", subjects, err)
+	}
+	if _, err := p.IMDbID(ctx, playlist); err != nil || len(subjects) != 2 ||
+		subjects[1] != (IMDbSubject{ID: playlistID, Kind: youtube.RefPlaylist, Name: "Fitness Runs"}) {
+		t.Errorf("playlist: asked about %+v, err = %v", subjects, err)
+	}
+	for range 2 {
+		for series, want := range map[*Series]string{channel: "tt4031218", uploads: "tt4031218", playlist: ""} {
+			if imdb, err := p.IMDbID(ctx, series); err != nil || imdb != want {
+				t.Errorf("%s: %q, %v; want %q", series.ID, imdb, err, want)
+			}
+		}
+	}
+	if len(asked) != 2 {
+		t.Errorf("asked %v, want the channel and the playlist once each", asked)
+	}
+	now = now.Add(imdbTTL + time.Second)
+	fail = true
+	if _, err := p.IMDbID(ctx, channel); err == nil {
+		t.Error("a failed lookup must be an error")
+	}
+	fail = false
+	if imdb, err := p.IMDbID(ctx, channel); err != nil || imdb != "tt4031218" || len(asked) != 4 {
+		t.Errorf("after the failure: %q, %v, asked %v; a failure is not kept", imdb, err, asked)
+	}
+}
+
+// Lookups are asked in turn; a failure counts only when none finds an ID.
+func TestFirstIMDb(t *testing.T) {
+	ctx := context.Background()
+	none := func(context.Context, IMDbSubject) (string, error) { return "", nil }
+	down := func(context.Context, IMDbSubject) (string, error) { return "", errors.New("down") }
+	found := func(id string) IMDbLookup {
+		return func(context.Context, IMDbSubject) (string, error) { return id, nil }
+	}
+	for name, c := range map[string]struct {
+		lookup  IMDbLookup
+		want    string
+		wantErr bool
+	}{
+		"the first to find one": {FirstIMDb(none, found("tt0000001"), found("tt0000002")), "tt0000001", false},
+		"found after a failure": {FirstIMDb(down, found("tt0000002")), "tt0000002", false},
+		"none":                  {FirstIMDb(none, none), "", false},
+		"none, and one failed":  {FirstIMDb(down, none), "", true},
+		"no lookups":            {FirstIMDb(), "", false},
+	} {
+		got, err := c.lookup(ctx, IMDbSubject{ID: channelID})
+		if got != c.want || (err != nil) != c.wantErr {
+			t.Errorf("%s: %q, %v", name, got, err)
+		}
 	}
 }
 

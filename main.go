@@ -21,7 +21,9 @@ import (
 	publicmanifest "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/manifest"
 	"github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/runtime"
 
+	"github.com/collisionc/silo-plugin-metadata-youtube/omdb"
 	"github.com/collisionc/silo-plugin-metadata-youtube/provider"
+	"github.com/collisionc/silo-plugin-metadata-youtube/wikidata"
 	"github.com/collisionc/silo-plugin-metadata-youtube/youtube"
 )
 
@@ -43,7 +45,90 @@ type runtimeServer struct {
 
 // settings are the values of the plugin's "youtube" config entry.
 type settings struct {
-	apiKey, timezone, seasons, backdrop string
+	apiKey, timezone, seasons, backdrop, imdb, omdbKey string
+}
+
+// The "imdb" setting: where a series' IMDb ID is looked for. Anything else,
+// "off" and unset among it, looks nowhere.
+const (
+	imdbFromWikidata = "wikidata"
+	imdbFromOMDb     = "omdb"
+	imdbFromBoth     = "wikidata_omdb" // Wikidata, then OMDb
+)
+
+func (s settings) askWikidata() bool { return s.imdb == imdbFromWikidata || s.imdb == imdbFromBoth }
+func (s settings) askOMDb() bool     { return s.imdb == imdbFromOMDb || s.imdb == imdbFromBoth }
+
+// imdbLookup is the lookup the settings ask for; nil when there is none.
+func (s settings) imdbLookup() provider.IMDbLookup {
+	var lookups []provider.IMDbLookup
+	if s.askWikidata() {
+		client := wikidata.NewClient(wikidataEndpoint, wikidataUserAgent(), nil)
+		lookups = append(lookups, func(ctx context.Context, subject provider.IMDbSubject) (string, error) {
+			return client.IMDbTitle(ctx, subject.ID)
+		})
+	}
+	switch {
+	case s.askOMDb() && s.omdbKey == "":
+		logger.Warn("youtube: IMDb IDs is set to search OMDb, but no OMDb API key is entered; OMDb is not searched")
+	case s.askOMDb():
+		lookups = append(lookups, omdbLookup(omdb.NewClient(omdbBaseURL, s.omdbKey, nil)))
+	}
+	if len(lookups) == 0 {
+		return nil
+	}
+	return provider.FirstIMDb(lookups...)
+}
+
+// omdbLookup finds a channel's IMDb title by the channel's name: the one
+// series OMDb lists under exactly that name that began no earlier than the
+// year before the channel was created. OMDb knows nothing of YouTube, so
+// this is a guess, made only when the setting asks for it, and refused when
+// several series share the name. The year keeps a channel that happens to be
+// named after an older TV show from getting that show's ID. Playlists are
+// not searched for: a playlist's title names its show less often, and its
+// date says nothing of when the show began.
+//
+// Each search is logged with what it found, since a wrong ID is only seen by
+// what other plugins then do with the entry.
+func omdbLookup(client *omdb.Client) provider.IMDbLookup {
+	return func(ctx context.Context, subject provider.IMDbSubject) (string, error) {
+		if subject.Kind != youtube.RefChannel {
+			return "", nil
+		}
+		notBefore := 0
+		if subject.Created > 0 {
+			notBefore = subject.Created - 1
+		}
+		series, err := client.SeriesNamed(ctx, subject.Name, notBefore)
+		if err != nil {
+			return "", err
+		}
+		fields := []any{"channel", subject.ID, "name", subject.Name, "series_from_year", notBefore}
+		switch len(series) {
+		case 0:
+			logger.Info("youtube: OMDb lists no series named as the channel", fields...)
+			return "", nil
+		case 1:
+			logger.Info("youtube: OMDb lists one series named as the channel; its IMDb ID goes to the entry",
+				append(fields, "imdb", series[0].IMDbID, "series", series[0].Title, "series_year", series[0].Year)...)
+			return series[0].IMDbID, nil
+		}
+		logger.Info("youtube: OMDb lists several series named as the channel; none is taken", append(fields, "series_found", len(series))...)
+		return "", nil
+	}
+}
+
+// wikidataEndpoint and omdbBaseURL are replaced by tests.
+var (
+	wikidataEndpoint = wikidata.DefaultEndpoint
+	omdbBaseURL      = omdb.DefaultBaseURL
+)
+
+// wikidataUserAgent names the plugin to Wikidata, as Wikimedia asks of every
+// client: the plugin, its version and where its source is.
+func wikidataUserAgent() string {
+	return "silo-plugin-metadata-youtube/" + startedVersion() + " (+https://github.com/collisionc/silo-plugin-metadata-youtube)"
 }
 
 func readSettings(entries []*pluginv1.ConfigEntry) settings {
@@ -57,7 +142,7 @@ func readSettings(entries []*pluginv1.ConfigEntry) settings {
 			v, _ := values[key].(string)
 			return strings.TrimSpace(v)
 		}
-		out = settings{apiKey: text("api_key"), timezone: text("timezone"), seasons: text("seasons"), backdrop: text("backdrop")}
+		out = settings{apiKey: text("api_key"), timezone: text("timezone"), seasons: text("seasons"), backdrop: text("backdrop"), imdb: text("imdb"), omdbKey: text("omdb_api_key")}
 	}
 	return out
 }
@@ -79,9 +164,14 @@ func (s *runtimeServer) configure(_ context.Context, entries []*pluginv1.ConfigE
 		logger.Warn("youtube: unknown time zone, using UTC", "timezone", config.timezone, "error", err)
 		loc = time.UTC
 	}
-	p := provider.New(youtube.NewClient(youtubeBaseURL, config.apiKey, nil), loc,
+	options := []provider.Option{
 		provider.WithSeasonMode(provider.ParseSeasonMode(config.seasons)),
-		provider.WithBackdrop(provider.ParseBackdrop(config.backdrop)))
+		provider.WithBackdrop(provider.ParseBackdrop(config.backdrop)),
+	}
+	if lookup := config.imdbLookup(); lookup != nil {
+		options = append(options, provider.WithIMDbLookup(lookup))
+	}
+	p := provider.New(youtube.NewClient(youtubeBaseURL, config.apiKey, nil), loc, options...)
 	s.mu.Lock()
 	s.provider = p
 	s.mu.Unlock()
@@ -113,6 +203,9 @@ func (configurationChecks) TestConfiguration(ctx context.Context, req *pluginv1.
 	defer cancel()
 	err := youtube.NewClient(youtubeBaseURL, config.apiKey, &http.Client{Timeout: checkTimeout}).CheckKey(ctx)
 	if err == nil {
+		if message := checkOMDb(ctx, config); message != "" {
+			return failed(message)
+		}
 		return &pluginv1.TestConfigurationResponse{Ok: true}, nil
 	}
 	var apiErr *youtube.APIError
@@ -125,6 +218,25 @@ func (configurationChecks) TestConfiguration(ctx context.Context, req *pluginv1.
 		return failed("YouTube rejected the API key: " + apiErr.Message)
 	}
 	return failed("Could not check the key with YouTube: " + err.Error())
+}
+
+// checkOMDb tries the OMDb key with one request, when the settings search
+// OMDb. It returns what to fix, or "" when there is nothing to.
+func checkOMDb(ctx context.Context, config settings) string {
+	if !config.askOMDb() {
+		return ""
+	}
+	if config.omdbKey == "" {
+		return "IMDb IDs is set to search OMDb: enter an OMDb API key, or choose another setting."
+	}
+	err := omdb.NewClient(omdbBaseURL, config.omdbKey, &http.Client{Timeout: checkTimeout}).CheckKey(ctx)
+	switch {
+	case err == nil:
+		return ""
+	case errors.Is(err, omdb.ErrKeyRefused):
+		return "The YouTube key works. OMDb refused the OMDb API key, or it has used up its requests for today."
+	}
+	return "The YouTube key works. Could not check the OMDb key: " + err.Error()
 }
 
 func (s *runtimeServer) current() (*provider.Provider, error) {
@@ -173,7 +285,7 @@ func (s *metadataServer) Search(ctx context.Context, req *pluginv1.SearchMetadat
 		return nil, err
 	}
 	for _, hit := range hits {
-		ids, err := idStruct(hit.ID)
+		ids, err := idsStruct(hit.ID, hit.IMDbID)
 		if err != nil {
 			return nil, err
 		}
@@ -234,7 +346,7 @@ func (s *metadataServer) GetMetadata(ctx context.Context, req *pluginv1.GetMetad
 		if err != nil || detail == nil {
 			return &pluginv1.GetMetadataResponse{}, err
 		}
-		item, err := seriesItem(detail)
+		item, err := seriesItem(detail, seriesIMDbID(ctx, p, detail.Series, req.GetProviderIds()))
 		if err != nil {
 			return nil, err
 		}
@@ -325,8 +437,25 @@ func ownID(ids *structpb.Struct) string {
 	return stringMap(ids)[provider.ProviderKey]
 }
 
-func seriesItem(detail *provider.SeriesDetail) (*pluginv1.MetadataItem, error) {
-	ids, err := idStruct(detail.ID)
+// seriesIMDbID is the IMDb title ID to fill into a series' entry: the one
+// the lookup finds on Wikidata or OMDb, when one is turned on. An entry that
+// already has an IMDb ID (from an {imdb-tt...} folder tag, or an earlier
+// refresh) keeps it and is not looked up. The lookup is an extra: when it
+// fails the series goes back without an IMDb ID, with a warning.
+func seriesIMDbID(ctx context.Context, p *provider.Provider, series *provider.Series, requestIDs *structpb.Struct) string {
+	if stringMap(requestIDs)[provider.IMDbKey] != "" {
+		return ""
+	}
+	imdb, err := p.IMDbID(ctx, series)
+	if err != nil {
+		logger.Warn("youtube: could not look the IMDb ID up", "series", series.ID, "error", err)
+		return ""
+	}
+	return imdb
+}
+
+func seriesItem(detail *provider.SeriesDetail, imdb string) (*pluginv1.MetadataItem, error) {
+	ids, err := idsStruct(detail.ID, imdb)
 	if err != nil {
 		return nil, err
 	}
@@ -594,6 +723,15 @@ func stringMap(value *structpb.Struct) map[string]string {
 		}
 	}
 	return out
+}
+
+// idsStruct is idStruct with the item's IMDb title ID beside its YouTube ID,
+// when it has one. Silo keeps both for the item.
+func idsStruct(id, imdb string) (*structpb.Struct, error) {
+	if id == "" || imdb == "" {
+		return idStruct(id)
+	}
+	return structpb.NewStruct(map[string]any{provider.ProviderKey: id, provider.IMDbKey: imdb})
 }
 
 func idStruct(id string) (*structpb.Struct, error) {

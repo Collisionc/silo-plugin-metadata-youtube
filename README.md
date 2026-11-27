@@ -170,6 +170,82 @@ video, or paste the video's URL there.
 thumbnail as background art; the channel banner costs one more unit per
 channel.
 
+## IMDb IDs
+
+YouTube has no IMDb IDs, but some channels are shows that IMDb lists, and
+other plugins (ratings, watch sync, OMDb) find an entry by its IMDb ID.
+There are three ways to give an entry one: a tag you write, which is
+certain, and two lookups the **IMDb IDs** setting turns on, both off by
+default.
+
+**A tag in the name.** Put `{imdb-tt…}` beside the YouTube ID:
+
+```
+YouTube/
+  Death Battle {yt-UCB9_VH_CNbbH4GfKu8qh63w} {imdb-tt4031218}/
+Videos/
+  Fan Film {imdb-tt1234567} [dQw4w9WgXcQ] (2009).mkv
+  Another Fan Film {yt-dQw4w9WgXcQ} {imdb-tt7654321}/Another Fan Film.mkv
+```
+
+Silo reads the imdb tag itself, sends its ID with the search, and then
+accepts only an answer that carries that ID. The plugin gives it to the
+channel, playlist or video the name identifies by ID, handle or URL, so the
+entry holds both IDs, and the match needs no year. A name with an imdb tag
+and nothing that identifies the channel or video is not matched: a search by
+title cannot say which result the IMDb ID belongs to.
+
+On a movie's **folder**, an imdb tag makes Silo take the title from the
+folder, not the file. The YouTube ID then goes on the folder too, before any
+year, as in the third example.
+
+In a movie library that also uses a provider working from IMDb IDs, such as
+[OMDb](https://github.com/neilmc78/silo-plugin-metadata-omdb), both answers
+carry the same IMDb ID, which is how Silo knows they are one film.
+
+**Wikidata.** Set **IMDb IDs** to **Look up on Wikidata** and the plugin
+asks [Wikidata](https://www.wikidata.org), when it loads a series, whether
+an IMDb title lists that channel (or playlist) as its own, and fills the ID
+into the entry. It needs no key and costs no YouTube quota; the answer is
+kept for a week. Each request goes to `query.wikidata.org` and names the
+channel, which is why the setting is off by default.
+
+- Wikidata has both IDs for about 3,200 titles (November 2026), so most
+  channels get none.
+- When several titles list one channel, as with a network's channel, none
+  is used.
+- A TV show's official channel gets the show's IMDb ID: Saturday Night
+  Live's channel gets `tt0072562`. Other plugins then treat the channel as
+  the show. Leave the setting off, or tag the folder yourself, if you keep
+  both and want them apart.
+- An entry that already has an IMDb ID keeps it.
+
+**OMDb, by the channel's name.** Set **IMDb IDs** to **Search OMDb by
+channel name** (or **Wikidata, then OMDb**) and enter an **OMDb API key**; a
+free one from [omdbapi.com](https://www.omdbapi.com/apikey.aspx) allows
+1,000 requests a day. [OMDb](https://www.omdbapi.com/) is built from IMDb's
+data and knows nothing of YouTube, so this is a match by name, a guess that
+Wikidata's lookup by channel ID is not. The plugin takes an IMDb ID only
+when:
+
+- exactly one series on the first page of OMDb's search has the channel's
+  name, compared by letters and digits alone (`DEATH BATTLE!` is
+  `Death Battle`);
+- that series began no earlier than the year before the channel was
+  created, so a channel that happens to be called `Friends` does not get
+  the 1994 show's ID.
+
+Several series of the name, or none, give no ID. Playlists are not searched
+for. A channel costs one OMDb request a week, and the search sends the
+channel's name to OMDb. Every search writes a line to Silo's log saying what
+it found (`youtube: OMDb lists one series named as the channel…`), with the
+series' title, year and IMDb ID: check the first ones against IMDb, since a
+wrong ID only shows in what other plugins then do with the entry.
+
+A wrong ID is not corrected by turning the setting off: an entry keeps the
+IMDb ID it has, and the plugin never removes or replaces one. It has to be
+changed in Silo.
+
 ## Setup
 
 1. Create a YouTube Data API v3 key: Google Cloud console, a project, **APIs &
@@ -187,8 +263,9 @@ channel.
    season per year or one season; **Backdrop** chooses the series background
    art: none (the default, as banners and thumbnails carry lettering that
    makes the description hard to read), the channel banner, or the newest
-   video's thumbnail. **Check Connection** tries the key with one call
-   (1 quota unit) and says what to fix if YouTube refuses it.
+   video's thumbnail. **IMDb IDs** can fill in a channel's IMDb ID from
+   Wikidata or OMDb (see [IMDb IDs](#imdb-ids)). **Check Connection** tries the key
+   with one call (1 quota unit) and says what to fix if YouTube refuses it.
 4. Keep the channels in a TV library of their own, and in that library
    enable **YouTube** as the only series metadata provider: turn TVDB and TMDB
    off there. The plugin installs disabled, so other libraries are not

@@ -92,14 +92,14 @@ func (p *Provider) SearchMovies(ctx context.Context, query string, providerIDs m
 			continue
 		}
 		movie := p.movieFromVideo(video)
-		return []SearchHit{{
+		return claimed([]SearchHit{{
 			ID:       movie.VideoID,
 			Title:    movie.Title,
 			Year:     movie.Year,
 			Overview: movie.Overview,
 			ImageURL: movie.Thumbnail.URL,
 			Aliases:  queryAliases(movie.Title, query),
-		}}, nil
+		}}, providerIDs), nil
 	}
 	p.mu.Lock()
 	put(p.searches, missKey, nil, now, now.Add(searchTTL), maxCachedSearches)

@@ -49,8 +49,8 @@ func TestManifest(t *testing.T) {
 		if _, ok := schema.Properties[field.GetKey()]; !ok {
 			t.Errorf("admin form field %q is not in the JSON schema", field.GetKey())
 		}
-		if field.GetKey() == "api_key" && !field.GetSecret() {
-			t.Error("the API key must be stored as a secret")
+		if strings.HasSuffix(field.GetKey(), "api_key") && !field.GetSecret() {
+			t.Errorf("%s must be stored as a secret", field.GetKey())
 		}
 	}
 }
@@ -292,6 +292,73 @@ func TestMovieThroughTheGRPCHandlers(t *testing.T) {
 	meta, err = s.GetMetadata(ctx, &pluginv1.GetMetadataRequest{ItemType: "movie", ProviderIds: ids})
 	if err != nil || meta.GetItem().GetBackdropPath() != "https://yt3.googleusercontent.com/b=w2560" {
 		t.Errorf("banner backdrop = %q, err = %v", meta.GetItem().GetBackdropPath(), err)
+	}
+}
+
+// A series' entry gets an IMDb ID from Wikidata when the setting is on, and a
+// search result carries the IMDb ID Silo read from the folder's name.
+func TestIMDbIDs(t *testing.T) {
+	fakeAPI(t)
+	var asked atomic.Int64
+	wd := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked.Add(1)
+		if !strings.HasPrefix(r.Header.Get("User-Agent"), "silo-plugin-metadata-youtube/") ||
+			!strings.Contains(r.URL.Query().Get("query"), `wdt:P2397 "UCA94TZluH5eQtkQpaCZQfRw"`) {
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`{"results":{"bindings":[{"imdb":{"value":"tt4031218"}}]}}`))
+	}))
+	previous := wikidataEndpoint
+	wikidataEndpoint = wd.URL
+	t.Cleanup(func() { wikidataEndpoint = previous })
+	ctx := context.Background()
+	ids, _ := structpb.NewStruct(map[string]any{"youtube": "UCA94TZluH5eQtkQpaCZQfRw"})
+	series := &pluginv1.GetMetadataRequest{ItemType: "series", ProviderIds: ids}
+
+	// Off unless asked for: Wikidata is not called.
+	s := configuredWith(t, map[string]any{"api_key": "k"})
+	meta, err := s.GetMetadata(ctx, series)
+	if err != nil || meta.GetItem().GetProviderIds().AsMap()["imdb"] != nil || asked.Load() != 0 {
+		t.Errorf("off: ids = %v, err = %v, asked = %d", meta.GetItem().GetProviderIds().AsMap(), err, asked.Load())
+	}
+
+	s = configuredWith(t, map[string]any{"api_key": "k", "imdb": "wikidata"})
+	meta, err = s.GetMetadata(ctx, series)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := meta.GetItem().GetProviderIds().AsMap(); got["imdb"] != "tt4031218" || got["youtube"] != "UCA94TZluH5eQtkQpaCZQfRw" || meta.GetItem().GetProviderId() != "UCA94TZluH5eQtkQpaCZQfRw" {
+		t.Errorf("on: ids = %v, provider_id = %q", got, meta.GetItem().GetProviderId())
+	}
+	// An entry that has an IMDb ID keeps it: no lookup, and none sent back.
+	before := asked.Load()
+	both, _ := structpb.NewStruct(map[string]any{"youtube": "UCA94TZluH5eQtkQpaCZQfRw", "imdb": "tt0000001"})
+	meta, err = s.GetMetadata(ctx, &pluginv1.GetMetadataRequest{ItemType: "series", ProviderIds: both})
+	if err != nil || meta.GetItem().GetProviderIds().AsMap()["imdb"] != nil || asked.Load() != before {
+		t.Errorf("entry with an IMDb ID: ids = %v, err = %v, asked = %d more", meta.GetItem().GetProviderIds().AsMap(), err, asked.Load()-before)
+	}
+
+	// "Brain Break Land {imdb-tt4031218} {yt-UC...}": Silo takes the imdb tag
+	// out of the title and sends its ID with the search.
+	sent, _ := structpb.NewStruct(map[string]any{"imdb": "tt4031218"})
+	search, err := s.Search(ctx, &pluginv1.SearchMetadataRequest{Query: "Brain Break Land {yt-UCA94TZluH5eQtkQpaCZQfRw}", ItemType: "series", ProviderIds: sent})
+	if err != nil || len(search.GetResults()) != 2 {
+		t.Fatalf("search = %+v, err = %v", search.GetResults(), err)
+	}
+	if got := search.GetResults()[0].GetProviderIds().AsMap(); got["imdb"] != "tt4031218" || got["youtube"] != "UCA94TZluH5eQtkQpaCZQfRw" {
+		t.Errorf("first result ids = %v, want the channel with the IMDb ID", got)
+	}
+	if got := search.GetResults()[1].GetProviderIds().AsMap(); got["imdb"] != nil {
+		t.Errorf("second result ids = %v, want no IMDb ID", got)
+	}
+
+	// Wikidata out of reach: the series still comes back, without the ID.
+	wd.Close()
+	s = configuredWith(t, map[string]any{"api_key": "k", "imdb": "wikidata"})
+	meta, err = s.GetMetadata(ctx, series)
+	if err != nil || meta.GetItem().GetTitle() != "Brain Break Land" || meta.GetItem().GetProviderIds().AsMap()["imdb"] != nil {
+		t.Errorf("Wikidata down: item = %+v, err = %v", meta.GetItem(), err)
 	}
 }
 

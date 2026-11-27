@@ -56,7 +56,7 @@
       "title": "YouTube",
       "description": "YouTube Data API access",
       "required": false,
-      "json_schema": "{\"type\":\"object\",\"properties\":{\"api_key\":{\"type\":\"string\"},\"timezone\":{\"type\":\"string\"},\"seasons\":{\"type\":\"string\",\"enum\":[\"year\",\"single\"]},\"backdrop\":{\"type\":\"string\",\"enum\":[\"none\",\"banner\",\"video\"]}},\"additionalProperties\":false}",
+      "json_schema": "{\"type\":\"object\",\"properties\":{\"api_key\":{\"type\":\"string\"},\"timezone\":{\"type\":\"string\"},\"seasons\":{\"type\":\"string\",\"enum\":[\"year\",\"single\"]},\"backdrop\":{\"type\":\"string\",\"enum\":[\"none\",\"banner\",\"video\"]},\"imdb\":{\"type\":\"string\",\"enum\":[\"off\",\"wikidata\",\"omdb\",\"wikidata_omdb\"]},\"omdb_api_key\":{\"type\":\"string\"}},\"additionalProperties\":false}",
       "admin_form": {
         "fields": [
           {
@@ -110,6 +110,38 @@
                 "label": "Newest video's thumbnail"
               }
             ]
+          },
+          {
+            "key": "imdb",
+            "label": "IMDb IDs",
+            "description": "Fill in a channel's IMDb ID, so plugins that work from IMDb IDs can find the entry. Wikidata is asked by the channel's ID (no key needed) and lists few channels. OMDb is searched by the channel's name, which is a guess: the ID is taken only when exactly one series has that name and began no earlier than the year before the channel was created. Either way a TV show's official channel can get the show's IMDb ID. An {imdb-tt...} tag in a folder's name is used whatever this is set to.",
+            "control": "ADMIN_FORM_CONTROL_SELECT",
+            "default_value": "off",
+            "options": [
+              {
+                "value": "off",
+                "label": "Off"
+              },
+              {
+                "value": "wikidata",
+                "label": "Look up on Wikidata"
+              },
+              {
+                "value": "omdb",
+                "label": "Search OMDb by channel name"
+              },
+              {
+                "value": "wikidata_omdb",
+                "label": "Wikidata, then OMDb"
+              }
+            ]
+          },
+          {
+            "key": "omdb_api_key",
+            "label": "OMDb API key",
+            "description": "Only needed when IMDb IDs searches OMDb. A free key from https://www.omdbapi.com/apikey.aspx allows 1,000 requests a day; a channel costs one request a week.",
+            "control": "ADMIN_FORM_CONTROL_PASSWORD",
+            "secret": true
           }
         ]
       }
