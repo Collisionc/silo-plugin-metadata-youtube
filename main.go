@@ -9,6 +9,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -428,20 +429,35 @@ func (s *metadataServer) GetImages(ctx context.Context, req *pluginv1.GetImagesR
 // Image URLs are stored as the absolute YouTube image URLs they are; there is
 // nothing to resolve.
 func (s *metadataServer) ResolveImageURL(_ context.Context, req *pluginv1.ResolveImageURLRequest) (*pluginv1.ResolveImageURLResponse, error) {
-	return &pluginv1.ResolveImageURLResponse{Url: absoluteOnly(req.GetPath())}, nil
+	return &pluginv1.ResolveImageURLResponse{Url: youtubeImageURL(req.GetPath())}, nil
 }
 
 func (s *metadataServer) ResolveImageURLs(_ context.Context, req *pluginv1.ResolveImageURLsRequest) (*pluginv1.ResolveImageURLsResponse, error) {
 	urls := make(map[string]string, len(req.GetPaths()))
 	for _, path := range req.GetPaths() {
-		urls[path] = absoluteOnly(path)
+		urls[path] = youtubeImageURL(path)
 	}
 	return &pluginv1.ResolveImageURLsResponse{Urls: urls}, nil
 }
 
-func absoluteOnly(path string) string {
-	if strings.HasPrefix(path, "https://") {
-		return path
+// imageHostSuffixes are where the YouTube Data API's images live: video
+// thumbnails on i.ytimg.com (i9.ytimg.com for some), channel avatars on
+// yt3.ggpht.com, banners on yt3.googleusercontent.com.
+var imageHostSuffixes = []string{".ytimg.com", ".ggpht.com", ".googleusercontent.com"}
+
+// youtubeImageURL passes on an https URL of a YouTube image host, and nothing
+// else: every image this plugin gives Silo is one, so another URL would only
+// point Silo's server somewhere this plugin never sent it.
+func youtubeImageURL(path string) string {
+	u, err := url.Parse(path)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Port() != "" {
+		return ""
+	}
+	host := strings.ToLower(u.Hostname())
+	for _, suffix := range imageHostSuffixes {
+		if strings.HasSuffix(host, suffix) {
+			return path
+		}
 	}
 	return ""
 }

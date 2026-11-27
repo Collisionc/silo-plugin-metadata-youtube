@@ -215,14 +215,41 @@ func TestUnconfiguredPluginAsksForAKey(t *testing.T) {
 	}
 }
 
-func TestResolveImageURLsOnlyPassesHTTPS(t *testing.T) {
+func TestResolveImageURLsOnlyPassesYouTubeImages(t *testing.T) {
 	s := &metadataServer{runtime: &runtimeServer{}}
-	got, err := s.ResolveImageURLs(context.Background(), &pluginv1.ResolveImageURLsRequest{Paths: []string{"https://i.ytimg.com/a.jpg", "/etc/passwd", "http://x/y"}})
+	pass := []string{
+		"https://i.ytimg.com/vi/0bNNs5GTru0/maxresdefault.jpg",
+		"https://i9.ytimg.com/vi/0bNNs5GTru0/hqdefault.jpg",
+		"https://yt3.ggpht.com/a=s800",
+		"https://yt3.googleusercontent.com/b=w2560",
+	}
+	refuse := []string{
+		"/etc/passwd",
+		"http://i.ytimg.com/a.jpg",                 // not https
+		"https://example.com/a.jpg",                // another host
+		"https://i.ytimg.com.example.com/a.jpg",    // a look-alike
+		"https://evilytimg.com/a.jpg",              // a suffix without the dot
+		"https://i.ytimg.com:8443/a.jpg",           // another port
+		"https://user@i.ytimg.com/a.jpg",           // credentials
+		"https://169.254.169.254/latest/meta-data", // a cloud metadata address
+	}
+	got, err := s.ResolveImageURLs(context.Background(), &pluginv1.ResolveImageURLsRequest{Paths: append(append([]string{}, pass...), refuse...)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.GetUrls()["https://i.ytimg.com/a.jpg"] != "https://i.ytimg.com/a.jpg" || got.GetUrls()["/etc/passwd"] != "" || got.GetUrls()["http://x/y"] != "" {
-		t.Errorf("urls = %v", got.GetUrls())
+	for _, path := range pass {
+		if got.GetUrls()[path] != path {
+			t.Errorf("%s: got %q, want it passed on", path, got.GetUrls()[path])
+		}
+	}
+	for _, path := range refuse {
+		if got.GetUrls()[path] != "" {
+			t.Errorf("%s: got %q, want it refused", path, got.GetUrls()[path])
+		}
+	}
+	one, err := s.ResolveImageURL(context.Background(), &pluginv1.ResolveImageURLRequest{Path: "https://example.com/a.jpg"})
+	if err != nil || one.GetUrl() != "" {
+		t.Errorf("single: %q, %v", one.GetUrl(), err)
 	}
 }
 
