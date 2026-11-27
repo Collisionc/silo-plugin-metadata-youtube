@@ -208,7 +208,10 @@ asks [Wikidata](https://www.wikidata.org), when it loads a series, whether
 an IMDb title lists that channel (or playlist) as its own, and fills the ID
 into the entry. It needs no key and costs no YouTube quota; the answer is
 kept for a week. Each request goes to `query.wikidata.org` and names the
-channel, which is why the setting is off by default.
+channel, which is why the setting is off by default. Wikidata refuses a
+client that asks too fast (HTTP 429): the plugin asks once more after a
+short wait, and after a longer one leaves the series without an IMDb ID
+until its next refresh.
 
 - Wikidata has both IDs for about 3,200 titles (November 2026), so most
   channels get none.

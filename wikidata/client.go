@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -85,20 +86,20 @@ func (c *Client) IMDbTitle(ctx context.Context, youtubeID string) (string, error
 	if c.userAgent != "" {
 		req.Header.Set("User-Agent", c.userAgent)
 	}
-	resp, err := c.http.Do(req)
+	body, wait, err := c.do(req)
+	if wait >= 0 {
+		// Asked too fast: once more, after the wait Wikidata asks for.
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", fmt.Errorf("%w: %w", ErrRequestFailed, ctx.Err())
+		case <-timer.C:
+		}
+		body, _, err = c.do(req.Clone(ctx))
+	}
 	if err != nil {
-		return "", fmt.Errorf("%w: %w", ErrRequestFailed, err)
-	}
-	defer resp.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
-	if err != nil {
-		return "", fmt.Errorf("%w: reading response: %w", ErrRequestFailed, err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%w: HTTP %d", ErrRequestFailed, resp.StatusCode)
-	}
-	if len(body) > maxResponseBody {
-		return "", fmt.Errorf("%w: response larger than %d bytes", ErrRequestFailed, maxResponseBody)
+		return "", err
 	}
 	var out struct {
 		Results struct {
@@ -124,4 +125,45 @@ func (c *Client) IMDbTitle(ctx context.Context, youtubeID string) (string, error
 		title = id
 	}
 	return title, nil
+}
+
+// The Query Service answers HTTP 429, with the seconds to wait in
+// Retry-After, to a client that asks too fast; a library refresh asks about
+// one channel after another. Such a request is made once more when the wait
+// is short. A longer one is left to the next refresh: Silo waits 30 seconds
+// for a series.
+const maxRetryWait = 5 * time.Second
+
+// retryWait is the wait when Wikidata names none. Shortened by tests.
+var retryWait = time.Second
+
+// do sends req and returns the body of an HTTP 200 answer. wait is negative,
+// except for a 429 worth asking again after wait.
+func (c *Client) do(req *http.Request) (body []byte, wait time.Duration, err error) {
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, -1, fmt.Errorf("%w: %w", ErrRequestFailed, err)
+	}
+	defer resp.Body.Close()
+	body, err = io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
+	if err != nil {
+		return nil, -1, fmt.Errorf("%w: reading response: %w", ErrRequestFailed, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		wait = -1
+		if resp.StatusCode == http.StatusTooManyRequests {
+			wait = retryWait
+			if seconds, err := strconv.Atoi(strings.TrimSpace(resp.Header.Get("Retry-After"))); err == nil && seconds >= 0 {
+				wait = time.Duration(seconds) * time.Second
+			}
+			if wait > maxRetryWait {
+				wait = -1
+			}
+		}
+		return nil, wait, fmt.Errorf("%w: HTTP %d", ErrRequestFailed, resp.StatusCode)
+	}
+	if len(body) > maxResponseBody {
+		return nil, -1, fmt.Errorf("%w: response larger than %d bytes", ErrRequestFailed, maxResponseBody)
+	}
+	return body, -1, nil
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const (
@@ -82,7 +83,72 @@ func TestIMDbTitle(t *testing.T) {
 	}
 }
 
+// Wikidata answers HTTP 429 to a client that asks too fast. The lookup asks
+// once more after a short wait, and not at all after a long one.
+func TestIMDbTitleAsksAgainAfterHTTP429(t *testing.T) {
+	previous := retryWait
+	retryWait = time.Millisecond
+	t.Cleanup(func() { retryWait = previous })
+	var calls, refusals atomic.Int64
+	var retryAfter atomic.Value
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) <= refusals.Load() {
+			if wait := retryAfter.Load().(string); wait != "" {
+				w.Header().Set("Retry-After", wait)
+			}
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		if r.Header.Get("User-Agent") != "test-agent/1" || !strings.Contains(r.URL.Query().Get("query"), channel) {
+			http.Error(w, "the second request is not the first", http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(bindings("tt4031218")))
+	}))
+	defer server.Close()
+	c := NewClient(server.URL, "test-agent/1", server.Client())
+	ctx := context.Background()
+
+	for name, test := range map[string]struct {
+		refusals   int64
+		retryAfter string
+		want       string
+		wantCalls  int64
+	}{
+		"refused once":                {1, "", "tt4031218", 2},
+		"refused once, wait named":    {1, "0", "tt4031218", 2},
+		"refused twice":               {2, "0", "", 2},
+		"asked to wait a minute":      {1, "60", "", 1},
+		"a wait that is not a number": {1, "Fri, 27 Nov 2026 18:00:00 GMT", "tt4031218", 2},
+	} {
+		calls.Store(0)
+		refusals.Store(test.refusals)
+		retryAfter.Store(test.retryAfter)
+		got, err := c.IMDbTitle(ctx, channel)
+		if got != test.want || (err != nil) != (test.want == "") || calls.Load() != test.wantCalls {
+			t.Errorf("%s: IMDbTitle = %q, %v after %d requests; want %q after %d", name, got, err, calls.Load(), test.want, test.wantCalls)
+		}
+		if err != nil && !errors.Is(err, ErrRequestFailed) {
+			t.Errorf("%s: err = %v, want ErrRequestFailed", name, err)
+		}
+	}
+
+	// A lookup that is called off does not sit out the wait.
+	calls.Store(0)
+	refusals.Store(1)
+	retryAfter.Store("5")
+	called, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	if _, err := c.IMDbTitle(called, channel); !errors.Is(err, ErrRequestFailed) || time.Since(started) > 2*time.Second || calls.Load() != 1 {
+		t.Errorf("called off: err = %v after %v and %d requests", err, time.Since(started), calls.Load())
+	}
+}
+
 func TestIMDbTitleFailures(t *testing.T) {
+	previous := retryWait
+	retryWait = time.Millisecond
+	t.Cleanup(func() { retryWait = previous })
 	status := http.StatusTooManyRequests
 	body := "slow down"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
