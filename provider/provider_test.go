@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -652,5 +653,44 @@ func TestSlowVideoDetailsLeaveTheListingsTitles(t *testing.T) {
 	}
 	if got := fake.count("videos"); got != 1 {
 		t.Errorf("videos calls = %d, want 1: the details fetched once", got)
+	}
+}
+
+// The details of a channel's videos are fetched a few calls at a time, and a
+// failure stops the fetch with what the finished calls brought.
+func TestVideoDetailsAreFetchedAFewCallsAtATime(t *testing.T) {
+	p, fake := newTestProvider(t)
+	ids := make([]string, 0, 230)
+	for i := range 230 {
+		ids = append(ids, fmt.Sprintf("vid%08d", i))
+	}
+	videos, err := p.fetchVideos(context.Background(), ids)
+	if err != nil || len(videos) != len(ids) {
+		t.Fatalf("%d videos, err = %v; want %d", len(videos), err, len(ids))
+	}
+	if fake.count("videos") != 5 {
+		t.Errorf("%d calls, want 5: 50 videos to a call", fake.count("videos"))
+	}
+	if cached, missing := p.cachedVideos(ids); len(cached) != len(ids) || len(missing) != 0 {
+		t.Errorf("%d kept, %d missing", len(cached), len(missing))
+	}
+
+	fake.quota = true
+	if _, err := p.fetchVideos(context.Background(), []string{"another0001"}); err == nil {
+		t.Error("want the quota error")
+	}
+	called := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	go func() {
+		defer close(called)
+		if _, err := p.fetchVideos(ctx, ids); err == nil {
+			t.Error("a fetch that was called off: want its error")
+		}
+	}()
+	select {
+	case <-called:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a fetch that was called off did not return")
 	}
 }

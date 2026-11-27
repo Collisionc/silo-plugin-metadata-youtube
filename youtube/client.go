@@ -247,10 +247,8 @@ type Channel struct {
 	Snippet struct {
 		Title       string     `json:"title"`
 		Description string     `json:"description"`
-		CustomURL   string     `json:"customUrl"`
 		PublishedAt string     `json:"publishedAt"`
 		Thumbnails  Thumbnails `json:"thumbnails"`
-		Country     string     `json:"country"`
 	} `json:"snippet"`
 	ContentDetails struct {
 		RelatedPlaylists struct {
@@ -280,7 +278,23 @@ func UploadsPlaylistFor(channelID string) string {
 	return ""
 }
 
-const channelParts = "snippet,contentDetails,brandingSettings"
+// Every call names, in "fields", the values the plugin reads, and the API
+// sends no others. A page of 50 playlist entries is otherwise mostly their
+// descriptions and five sizes of thumbnail, none of which a listing uses: it
+// is some forty times the size, and a channel of thousands of videos is
+// listed a page at a time inside the 30 seconds Silo waits.
+const (
+	channelParts  = "snippet,contentDetails,brandingSettings"
+	channelFields = "items(id,snippet(title,description,publishedAt,thumbnails),contentDetails/relatedPlaylists/uploads,brandingSettings/image/bannerExternalUrl)"
+
+	playlistFields = "items(id,snippet(title,description,channelId,channelTitle,publishedAt,thumbnails))"
+
+	playlistItemParts  = "snippet,contentDetails,status"
+	playlistItemFields = "nextPageToken,items(snippet/title,contentDetails(videoId,videoPublishedAt),status/privacyStatus)"
+
+	videoParts  = "snippet,contentDetails"
+	videoFields = "items(id,snippet(title,description,publishedAt,channelId,channelTitle,thumbnails),contentDetails/duration)"
+)
 
 type channelList struct {
 	Items []Channel `json:"items"`
@@ -295,7 +309,7 @@ func (c *Client) Channels(ctx context.Context, ids []string) ([]Channel, error) 
 		return nil, fmt.Errorf("youtube: at most %d channel IDs per call", maxPageSize)
 	}
 	var out channelList
-	err := c.get(ctx, "channels", url.Values{"part": {channelParts}, "id": {strings.Join(ids, ",")}, "maxResults": {fmt.Sprint(maxPageSize)}}, &out)
+	err := c.get(ctx, "channels", url.Values{"part": {channelParts}, "fields": {channelFields}, "id": {strings.Join(ids, ",")}, "maxResults": {fmt.Sprint(maxPageSize)}}, &out)
 	return out.Items, err
 }
 
@@ -306,7 +320,7 @@ func (c *Client) ChannelByHandle(ctx context.Context, handle string) (*Channel, 
 		return nil, nil
 	}
 	var out channelList
-	if err := c.get(ctx, "channels", url.Values{"part": {channelParts}, "forHandle": {"@" + handle}}, &out); err != nil {
+	if err := c.get(ctx, "channels", url.Values{"part": {channelParts}, "fields": {channelFields}, "forHandle": {"@" + handle}}, &out); err != nil {
 		return nil, err
 	}
 	if len(out.Items) == 0 {
@@ -322,7 +336,7 @@ const checkKeyChannel = "UCBR8-60-B28hp2BmDPdntcQ"
 // whether the API accepts the key.
 func (c *Client) CheckKey(ctx context.Context) error {
 	var out channelList
-	return c.get(ctx, "channels", url.Values{"part": {"id"}, "id": {checkKeyChannel}}, &out)
+	return c.get(ctx, "channels", url.Values{"part": {"id"}, "fields": {"items/id"}, "id": {checkKeyChannel}}, &out)
 }
 
 // SearchChannels returns the IDs of the channels best matching query, best
@@ -338,7 +352,7 @@ func (c *Client) SearchChannels(ctx context.Context, query string, limit int) ([
 			} `json:"id"`
 		} `json:"items"`
 	}
-	if err := c.get(ctx, "search", url.Values{"part": {"id"}, "type": {"channel"}, "q": {query}, "maxResults": {fmt.Sprint(limit)}}, &out); err != nil {
+	if err := c.get(ctx, "search", url.Values{"part": {"id"}, "fields": {"items/id/channelId"}, "type": {"channel"}, "q": {query}, "maxResults": {fmt.Sprint(limit)}}, &out); err != nil {
 		return nil, err
 	}
 	ids := make([]string, 0, len(out.Items))
@@ -374,15 +388,14 @@ func (c *Client) Playlists(ctx context.Context, ids []string) ([]Playlist, error
 	var out struct {
 		Items []Playlist `json:"items"`
 	}
-	err := c.get(ctx, "playlists", url.Values{"part": {"snippet"}, "id": {strings.Join(ids, ",")}, "maxResults": {fmt.Sprint(maxPageSize)}}, &out)
+	err := c.get(ctx, "playlists", url.Values{"part": {"snippet"}, "fields": {playlistFields}, "id": {strings.Join(ids, ",")}, "maxResults": {fmt.Sprint(maxPageSize)}}, &out)
 	return out.Items, err
 }
 
 // PlaylistItem is one video's entry in a playlist.
 type PlaylistItem struct {
 	Snippet struct {
-		Title       string `json:"title"`
-		PublishedAt string `json:"publishedAt"`
+		Title string `json:"title"`
 	} `json:"snippet"`
 	ContentDetails struct {
 		VideoID          string `json:"videoId"`
@@ -398,7 +411,7 @@ func (c *Client) PlaylistItems(ctx context.Context, playlistID string) ([]Playli
 	var all []PlaylistItem
 	pageToken := ""
 	for page := 0; page < maxPlaylistPages; page++ {
-		params := url.Values{"part": {"snippet,contentDetails,status"}, "playlistId": {playlistID}, "maxResults": {fmt.Sprint(maxPageSize)}}
+		params := url.Values{"part": {playlistItemParts}, "fields": {playlistItemFields}, "playlistId": {playlistID}, "maxResults": {fmt.Sprint(maxPageSize)}}
 		if pageToken != "" {
 			params.Set("pageToken", pageToken)
 		}
@@ -428,14 +441,10 @@ type Video struct {
 		ChannelID    string     `json:"channelId"`
 		ChannelTitle string     `json:"channelTitle"`
 		Thumbnails   Thumbnails `json:"thumbnails"`
-		Tags         []string   `json:"tags"`
 	} `json:"snippet"`
 	ContentDetails struct {
 		Duration string `json:"duration"`
 	} `json:"contentDetails"`
-	Status struct {
-		PrivacyStatus string `json:"privacyStatus"`
-	} `json:"status"`
 }
 
 // Videos looks videos up by ID, 50 per call. Videos that no longer exist or
@@ -447,7 +456,7 @@ func (c *Client) Videos(ctx context.Context, ids []string) ([]Video, error) {
 		var out struct {
 			Items []Video `json:"items"`
 		}
-		if err := c.get(ctx, "videos", url.Values{"part": {"snippet,contentDetails,status"}, "id": {strings.Join(ids[start:end], ",")}, "maxResults": {fmt.Sprint(maxPageSize)}}, &out); err != nil {
+		if err := c.get(ctx, "videos", url.Values{"part": {videoParts}, "fields": {videoFields}, "id": {strings.Join(ids[start:end], ",")}, "maxResults": {fmt.Sprint(maxPageSize)}}, &out); err != nil {
 			return nil, err
 		}
 		all = append(all, out.Items...)

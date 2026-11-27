@@ -917,22 +917,67 @@ func (p *Provider) cachedVideos(ids []string) (map[string]youtube.Video, []strin
 	return out, missing
 }
 
-// fetchVideos looks the videos up 50 per call, caching each call's answer as
-// it comes, so a fetch cut short keeps what it got.
+// videoFetchers is how many videos.list calls run at once. The details of a
+// channel's videos are 50 to a call, and the calls do not depend on each
+// other: a few at a time, 6,000 videos take a quarter of the time, inside
+// what Silo waits for more often.
+const videoFetchers = 4
+
+// fetchVideos looks the videos up 50 per call, a few calls at a time, caching
+// each call's answer as it comes, so a fetch cut short keeps what it got.
 func (p *Provider) fetchVideos(ctx context.Context, ids []string) (map[string]youtube.Video, error) {
-	out := make(map[string]youtube.Video, len(ids))
-	for batch := range slices.Chunk(ids, videoBatch) {
-		videos, err := p.yt.Videos(ctx, batch)
-		if err != nil {
-			return out, err
-		}
-		now := p.now()
-		p.mu.Lock()
-		for _, video := range videos {
-			out[video.ID] = video
-			put(p.videos, video.ID, video, now, now.Add(detailTTL), maxCachedVideos)
-		}
-		p.mu.Unlock()
+	parent := ctx
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		out      = make(map[string]youtube.Video, len(ids))
+		failed   error
+		batches  = make(chan []string)
+		fetchers = min(videoFetchers, (len(ids)+videoBatch-1)/videoBatch)
+	)
+	for range fetchers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for batch := range batches {
+				videos, err := p.yt.Videos(ctx, batch)
+				if err != nil {
+					mu.Lock()
+					if failed == nil {
+						failed = err
+					}
+					mu.Unlock()
+					cancel() // the calls under way stop; the rest are not made
+					continue
+				}
+				now := p.now()
+				p.mu.Lock()
+				for _, video := range videos {
+					put(p.videos, video.ID, video, now, now.Add(detailTTL), maxCachedVideos)
+				}
+				p.mu.Unlock()
+				mu.Lock()
+				for _, video := range videos {
+					out[video.ID] = video
+				}
+				mu.Unlock()
+			}
+		}()
 	}
-	return out, nil
+send:
+	for batch := range slices.Chunk(ids, videoBatch) {
+		select {
+		case batches <- batch:
+		case <-ctx.Done():
+			break send
+		}
+	}
+	close(batches)
+	wg.Wait()
+	if failed == nil {
+		failed = parent.Err()
+	}
+	return out, failed
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -74,5 +75,33 @@ func TestUnreadableAnswerIsARequestFailure(t *testing.T) {
 	}
 	if calls != maxAttempts {
 		t.Errorf("%d requests, want %d", calls, maxAttempts)
+	}
+}
+
+// Every call asks for the values the plugin reads and no others: a listing's
+// page is otherwise mostly descriptions and thumbnails it never uses.
+func TestEveryCallNamesItsFields(t *testing.T) {
+	asked := map[string]string{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked[r.URL.Path[1:]] = r.URL.Query().Get("fields")
+		_, _ = w.Write([]byte(`{"items":[]}`))
+	}))
+	t.Cleanup(server.Close)
+	c := NewClient(server.URL, "k", server.Client())
+	ctx := context.Background()
+	_, _ = c.Channels(ctx, []string{checkKeyChannel})
+	_, _ = c.Playlists(ctx, []string{"PL22J3VaeABQD_IZs7y60I3lUrrFTzkpat"})
+	_, _ = c.PlaylistItems(ctx, "UUBR8-60-B28hp2BmDPdntcQ")
+	_, _ = c.Videos(ctx, []string{"0bNNs5GTru0"})
+	_, _ = c.SearchChannels(ctx, "name", 5)
+	for _, resource := range []string{"channels", "playlists", "playlistItems", "videos", "search"} {
+		if asked[resource] == "" {
+			t.Errorf("%s was asked without fields", resource)
+		}
+	}
+	for resource, unused := range map[string]string{"playlistItems": "description", "videos": "tags", "channels": "country"} {
+		if strings.Contains(asked[resource], unused) {
+			t.Errorf("%s asks for %s, which nothing reads: %s", resource, unused, asked[resource])
+		}
 	}
 }
