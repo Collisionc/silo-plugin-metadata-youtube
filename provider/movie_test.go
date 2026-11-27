@@ -57,7 +57,7 @@ func TestSearchMoviesByTheIDInTheName(t *testing.T) {
 // the IDs the tag can have been exists.
 func TestSearchMoviesRebuildsUnderscores(t *testing.T) {
 	p, fake := newTestProvider(t)
-	fake.gone = map[string]bool{"a_b-c_d__eF": true, "a_b-c__d_eF": true}
+	fake.set(func() { fake.gone = map[string]bool{"a_b-c_d__eF": true, "a_b-c__d_eF": true} })
 	hits, err := p.SearchMovies(context.Background(), "Some Talk [a b-c d eF]", nil)
 	if err != nil || len(hits) != 1 || hits[0].ID != "a__b-c_d_eF" {
 		t.Fatalf("hits = %+v, err = %v", hits, err)
@@ -90,15 +90,11 @@ func TestSearchMoviesKeepsAMissForAnHour(t *testing.T) {
 		t.Errorf("videos calls = %d, want 2: an hour later it is asked again", fake.count("videos"))
 	}
 
-	fake.mu.Lock()
-	fake.quota = true
-	fake.mu.Unlock()
+	fake.set(func() { fake.quota = true })
 	if _, err := p.SearchMovies(ctx, "Another [quotaVideo1]", nil); err == nil {
 		t.Error("a failed lookup must be an error, not a miss")
 	}
-	fake.mu.Lock()
-	fake.quota = false
-	fake.mu.Unlock()
+	fake.set(func() { fake.quota = false })
 	if hits, err := p.SearchMovies(ctx, "Another [quotaVideo1]", nil); err != nil || len(hits) != 1 {
 		t.Errorf("after the failure: hits = %+v, err = %v; a failure is not kept", hits, err)
 	}

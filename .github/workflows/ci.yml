@@ -44,8 +44,10 @@ jobs:
       - name: Vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
+      # With the race detector: the plugin answers Silo's calls on many
+      # goroutines over shared caches, and lists channels in the background.
       - name: Test
-        run: go test ./...
+        run: go test -race ./...
 
       - name: Build
         run: make build-all

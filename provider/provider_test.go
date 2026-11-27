@@ -57,6 +57,13 @@ func (f *fakeYouTube) holdListings(t *testing.T) (release func()) {
 	return release
 }
 
+// set changes the fake's switches while its server may be answering.
+func (f *fakeYouTube) set(change func()) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	change()
+}
+
 func (f *fakeYouTube) count(resource string) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -390,7 +397,7 @@ func TestSearchByTitleIsAskedOnceAnHour(t *testing.T) {
 		t.Errorf("channel lookups = %d, want 1", fake.count("channels"))
 	}
 
-	fake.noSearchHits = true
+	fake.set(func() { fake.noSearchHits = true })
 	for range 3 {
 		if hits, err := p.Search(ctx, "Nobody Here", nil); err != nil || len(hits) != 0 {
 			t.Fatalf("hits = %+v, err = %v", hits, err)
@@ -412,11 +419,11 @@ func TestSearchByTitleIsAskedOnceAnHour(t *testing.T) {
 func TestSearchFailureIsNotKept(t *testing.T) {
 	p, fake := newTestProvider(t)
 	ctx := context.Background()
-	fake.quota = true
+	fake.set(func() { fake.quota = true })
 	if _, err := p.Search(ctx, "Brain Break Land", nil); err == nil {
 		t.Fatal("want the quota error")
 	}
-	fake.quota = false
+	fake.set(func() { fake.quota = false })
 	if hits, err := p.Search(ctx, "Brain Break Land", nil); err != nil || len(hits) != 1 {
 		t.Fatalf("after the quota came back: hits = %+v, err = %v", hits, err)
 	}
@@ -555,9 +562,7 @@ func TestListingIsCheckedByItsFirstPage(t *testing.T) {
 		t.Errorf("three checks, nothing new: %d calls, want 5 (one page each)", calls())
 	}
 
-	fake.mu.Lock()
-	fake.newUpload = true
-	fake.mu.Unlock()
+	fake.set(func() { fake.newUpload = true })
 	now = now.Add(listingTTL + time.Minute)
 	if got := seasons(); calls() != 7 || got[len(got)-1].Number != 2025 || got[len(got)-1].Count != 2 {
 		t.Errorf("a new upload: %d calls, seasons %+v; want 7 calls and two uploads in 2025", calls(), got)
@@ -574,7 +579,7 @@ func TestListingIsCheckedByItsFirstPage(t *testing.T) {
 // page: it is listed whole each time.
 func TestListingWithoutASizeIsListedWhole(t *testing.T) {
 	p, fake := newTestProvider(t)
-	fake.noTotals = true
+	fake.set(func() { fake.noTotals = true })
 	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
 	p.now = func() time.Time { return now }
 	ctx := context.Background()
@@ -602,7 +607,7 @@ func TestPlaylistSeries(t *testing.T) {
 
 func TestQuotaExceededIsReportedNotRetried(t *testing.T) {
 	p, fake := newTestProvider(t)
-	fake.quota = true
+	fake.set(func() { fake.quota = true })
 	_, err := p.Search(context.Background(), "Brain Break Land", nil)
 	var apiErr *youtube.APIError
 	if !errors.As(err, &apiErr) || !apiErr.QuotaExceeded() {
@@ -752,7 +757,7 @@ func TestVideoDetailsAreFetchedAFewCallsAtATime(t *testing.T) {
 		t.Errorf("%d kept, %d missing", len(cached), len(missing))
 	}
 
-	fake.quota = true
+	fake.set(func() { fake.quota = true })
 	if _, err := p.fetchVideos(context.Background(), []string{"another0001"}); err == nil {
 		t.Error("want the quota error")
 	}

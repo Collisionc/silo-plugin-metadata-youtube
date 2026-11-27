@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -62,9 +64,9 @@ func TestUnreachableAPIIsARequestFailure(t *testing.T) {
 // Silo retries. Reported as anything else it counts as permanent, and three
 // of those park a folder.
 func TestUnreadableAnswerIsARequestFailure(t *testing.T) {
-	calls := 0
+	var calls atomic.Int64
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		calls++
+		calls.Add(1)
 		_, _ = w.Write([]byte("<html><body>502 Bad Gateway</body></html>"))
 	}))
 	t.Cleanup(server.Close)
@@ -73,17 +75,20 @@ func TestUnreadableAnswerIsARequestFailure(t *testing.T) {
 	if err := client.CheckKey(context.Background()); !errors.Is(err, ErrRequestFailed) {
 		t.Fatalf("err = %v, want ErrRequestFailed", err)
 	}
-	if calls != maxAttempts {
-		t.Errorf("%d requests, want %d", calls, maxAttempts)
+	if calls.Load() != maxAttempts {
+		t.Errorf("%d requests, want %d", calls.Load(), maxAttempts)
 	}
 }
 
 // Every call asks for the values the plugin reads and no others: a listing's
 // page is otherwise mostly descriptions and thumbnails it never uses.
 func TestEveryCallNamesItsFields(t *testing.T) {
+	var mu sync.Mutex
 	asked := map[string]string{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		asked[r.URL.Path[1:]] = r.URL.Query().Get("fields")
+		mu.Unlock()
 		_, _ = w.Write([]byte(`{"items":[]}`))
 	}))
 	t.Cleanup(server.Close)
@@ -94,6 +99,8 @@ func TestEveryCallNamesItsFields(t *testing.T) {
 	_, _ = c.PlaylistPage(ctx, "UUBR8-60-B28hp2BmDPdntcQ", "")
 	_, _ = c.Videos(ctx, []string{"0bNNs5GTru0"})
 	_, _ = c.SearchChannels(ctx, "name", 5)
+	mu.Lock()
+	defer mu.Unlock()
 	for _, resource := range []string{"channels", "playlists", "playlistItems", "videos", "search"} {
 		if asked[resource] == "" {
 			t.Errorf("%s was asked without fields", resource)
@@ -110,11 +117,12 @@ func TestEveryCallNamesItsFields(t *testing.T) {
 // error the API answers too, and nothing for a call refused for quota or
 // one that reached no server.
 func TestUsageCountsQuotaUnits(t *testing.T) {
-	refuse := ""
+	var refuse atomic.Value
+	refuse.Store("")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if refuse != "" {
+		if reason := refuse.Load().(string); reason != "" {
 			w.WriteHeader(http.StatusForbidden)
-			_, _ = w.Write([]byte(`{"error":{"code":403,"message":"no","errors":[{"reason":"` + refuse + `"}]}}`))
+			_, _ = w.Write([]byte(`{"error":{"code":403,"message":"no","errors":[{"reason":"` + reason + `"}]}}`))
 			return
 		}
 		_, _ = w.Write([]byte(`{"items":[]}`))
@@ -135,9 +143,9 @@ func TestUsageCountsQuotaUnits(t *testing.T) {
 		t.Errorf("taken twice: %d (%s), want nothing", total, byCall)
 	}
 
-	refuse = "playlistItemsNotAccessible"
+	refuse.Store("playlistItemsNotAccessible")
 	_, _ = c.PlaylistPage(ctx, "PLprivate0000000000", "")
-	refuse = "quotaExceeded"
+	refuse.Store("quotaExceeded")
 	_, _ = c.Videos(ctx, []string{"0bNNs5GTru0"})
 	server.Close()
 	_, _ = c.Videos(ctx, []string{"0bNNs5GTru0"})
