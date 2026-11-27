@@ -123,6 +123,13 @@ every other call costs 1 unit per 50 results. Refreshing a channel of 1,000
 videos costs about 40 units: 20 to list it, 20 for the videos' details. The
 plugin caches listings for an hour and video details for a day.
 
+A channel search happens only for a folder whose name holds no channel or
+playlist ID or @handle, and Silo repeats it on every scan of that folder
+until it is matched. The plugin keeps each search's answer for an hour, an
+empty one too, so a folder scanned all day costs at most 2,400 units, not
+100 per scan. Putting the ID in the folder name (`[youtube-UC...]`) avoids
+searches altogether.
+
 When the quota runs out, YouTube answers `quotaExceeded` until midnight
 Pacific time, and metadata calls fail until then.
 

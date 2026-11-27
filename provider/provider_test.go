@@ -31,6 +31,8 @@ type fakeYouTube struct {
 	calls map[string]int
 	// quota makes every call answer 403 quotaExceeded.
 	quota bool
+	// noSearchHits makes a channel search find nothing.
+	noSearchHits bool
 }
 
 func (f *fakeYouTube) count(resource string) int {
@@ -76,6 +78,11 @@ func (f *fakeYouTube) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			map[string]any{"id": map[string]any{"kind": "youtube#channel", "channelId": channelID}},
 			map[string]any{"id": map[string]any{"kind": "youtube#channel", "channelId": "UCgone000000000000000000"}},
 		}}
+		f.mu.Lock()
+		if f.noSearchHits {
+			body = map[string]any{"items": []any{}}
+		}
+		f.mu.Unlock()
 	case "playlists":
 		if q.Get("id") == playlistID {
 			body = map[string]any{"items": []any{map[string]any{
@@ -310,6 +317,80 @@ func TestUploadsPlaylistSeries(t *testing.T) {
 	}
 	if fake.count("playlists") != 0 {
 		t.Error("an uploads playlist is built from its channel, not looked up as a playlist")
+	}
+}
+
+// Silo searches again on every scan of a folder it has not matched; each
+// free-text search costs 100 units, so the answer - an empty one too - is kept
+// for an hour.
+func TestSearchByTitleIsAskedOnceAnHour(t *testing.T) {
+	p, fake := newTestProvider(t)
+	ctx := context.Background()
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	p.now = func() time.Time { return now }
+
+	for range 3 {
+		if hits, err := p.Search(ctx, "Brain Break Land", nil); err != nil || len(hits) != 1 {
+			t.Fatalf("hits = %+v, err = %v", hits, err)
+		}
+	}
+	// Same words, other case and extra spaces: the same question.
+	if _, err := p.Search(ctx, "brain  break LAND", nil); err != nil {
+		t.Fatal(err)
+	}
+	if fake.count("search") != 1 {
+		t.Errorf("searches = %d, want 1", fake.count("search"))
+	}
+
+	fake.noSearchHits = true
+	for range 3 {
+		if hits, err := p.Search(ctx, "Nobody Here", nil); err != nil || len(hits) != 0 {
+			t.Fatalf("hits = %+v, err = %v", hits, err)
+		}
+	}
+	if fake.count("search") != 2 {
+		t.Errorf("searches = %d, want 2: an empty answer is kept as well", fake.count("search"))
+	}
+
+	now = now.Add(searchTTL + time.Second)
+	if _, err := p.Search(ctx, "Nobody Here", nil); err != nil {
+		t.Fatal(err)
+	}
+	if fake.count("search") != 3 {
+		t.Errorf("searches = %d, want 3: an hour later it is asked again", fake.count("search"))
+	}
+}
+
+func TestSearchFailureIsNotKept(t *testing.T) {
+	p, fake := newTestProvider(t)
+	ctx := context.Background()
+	fake.quota = true
+	if _, err := p.Search(ctx, "Brain Break Land", nil); err == nil {
+		t.Fatal("want the quota error")
+	}
+	fake.quota = false
+	if hits, err := p.Search(ctx, "Brain Break Land", nil); err != nil || len(hits) != 1 {
+		t.Fatalf("after the quota came back: hits = %+v, err = %v", hits, err)
+	}
+}
+
+func TestCachesAreBounded(t *testing.T) {
+	m := map[string]cached[int]{}
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	put(m, "old", 1, now, now.Add(-time.Minute), 3) // already expired
+	put(m, "a", 1, now, now.Add(time.Hour), 3)
+	put(m, "b", 1, now, now.Add(time.Hour), 3)
+	put(m, "c", 1, now, now.Add(time.Hour), 3) // full: the expired entry makes room
+	if _, ok := m["old"]; ok || len(m) != 3 {
+		t.Fatalf("after dropping the expired entry: %v", m)
+	}
+	put(m, "a", 2, now, now.Add(time.Hour), 3) // replacing needs no room
+	if len(m) != 3 || m["a"].value != 2 {
+		t.Fatalf("after replacing: %v", m)
+	}
+	put(m, "d", 1, now, now.Add(time.Hour), 3) // full, nothing expired: start again
+	if len(m) != 1 || m["d"].value != 1 {
+		t.Fatalf("after starting again: %v", m)
 	}
 }
 

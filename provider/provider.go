@@ -27,6 +27,23 @@ const (
 	// searchLimit is how many channels a free-text search offers. The search
 	// itself costs 100 quota units whatever the count.
 	searchLimit = 5
+	// searchTTL is how long a free-text search's answer is kept, an empty one
+	// too. Silo searches again each time it scans a folder it has not
+	// matched, and a busy folder is scanned hundreds of times a day: at 100
+	// units a search, a few such folders would spend the whole day's quota
+	// (10,000 units) on the same question.
+	searchTTL = time.Hour
+)
+
+// The caches' sizes are bounded, so a server with very many channels cannot
+// grow the plugin's memory without end. A full cache drops its expired
+// entries, and when that frees nothing it starts again empty: the cost is
+// quota, a few units per channel listed again.
+const (
+	maxCachedSeries   = 2000
+	maxCachedListings = 2000
+	maxCachedVideos   = 25000
+	maxCachedSearches = 1000
 )
 
 // Provider answers Silo's metadata calls from the YouTube Data API, with an
@@ -43,11 +60,30 @@ type Provider struct {
 	series   map[string]cached[*Series]
 	listings map[string]cached[[]NumberedUpload]
 	videos   map[string]cached[youtube.Video]
+	// searches holds the channel IDs a free-text search found, by query.
+	searches map[string]cached[[]string]
 }
 
 type cached[T any] struct {
 	value   T
 	expires time.Time
+}
+
+// put stores value under key in m until expires, making room first when m
+// holds limit entries: the expired ones go, and if none had, all of them.
+// The caller holds p.mu.
+func put[T any](m map[string]cached[T], key string, value T, now, expires time.Time, limit int) {
+	if _, ok := m[key]; !ok && len(m) >= limit {
+		for k, entry := range m {
+			if now.After(entry.expires) {
+				delete(m, k)
+			}
+		}
+		if len(m) >= limit {
+			clear(m)
+		}
+	}
+	m[key] = cached[T]{value: value, expires: expires}
 }
 
 // Backdrop chooses a series' background art.
@@ -97,6 +133,7 @@ func New(client *youtube.Client, loc *time.Location, options ...Option) *Provide
 		series:   make(map[string]cached[*Series]),
 		listings: make(map[string]cached[[]NumberedUpload]),
 		videos:   make(map[string]cached[youtube.Video]),
+		searches: make(map[string]cached[[]string]),
 	}
 	for _, option := range options {
 		option(p)
@@ -176,7 +213,7 @@ func (p *Provider) Search(ctx context.Context, query string, providerIDs map[str
 	if text == "" {
 		return nil, nil
 	}
-	ids, err := p.yt.SearchChannels(ctx, text, searchLimit)
+	ids, err := p.searchChannels(ctx, text)
 	if err != nil || len(ids) == 0 {
 		return nil, err
 	}
@@ -449,6 +486,28 @@ func channelBanner(url string) string {
 	return url + "=w2560"
 }
 
+// searchChannels runs a free-text channel search, or answers from the last
+// hour's searches for the same text (searchTTL), empty answers included. A
+// failed search is not kept: the next scan asks again.
+func (p *Provider) searchChannels(ctx context.Context, text string) ([]string, error) {
+	key := strings.ToLower(text)
+	now := p.now()
+	p.mu.Lock()
+	entry, ok := p.searches[key]
+	p.mu.Unlock()
+	if ok && !now.After(entry.expires) {
+		return entry.value, nil
+	}
+	ids, err := p.yt.SearchChannels(ctx, text, searchLimit)
+	if err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	put(p.searches, key, ids, now, now.Add(searchTTL), maxCachedSearches)
+	p.mu.Unlock()
+	return ids, nil
+}
+
 func (p *Provider) cachedSeries(id string) (*Series, bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -462,7 +521,8 @@ func (p *Provider) cachedSeries(id string) (*Series, bool) {
 func (p *Provider) storeSeries(series *Series) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.series[series.ID] = cached[*Series]{value: series, expires: p.now().Add(seriesTTL)}
+	now := p.now()
+	put(p.series, series.ID, series, now, now.Add(seriesTTL), maxCachedSeries)
 }
 
 // Listing returns a series' videos, numbered by Number.
@@ -499,7 +559,8 @@ func (p *Provider) Listing(ctx context.Context, series *Series) ([]NumberedUploa
 	}
 	numbered := Number(uploads, p.loc, p.mode)
 	p.mu.Lock()
-	p.listings[series.ID] = cached[[]NumberedUpload]{value: numbered, expires: p.now().Add(listingTTL)}
+	now := p.now()
+	put(p.listings, series.ID, numbered, now, now.Add(listingTTL), maxCachedListings)
 	p.mu.Unlock()
 	return numbered, nil
 }
@@ -723,7 +784,7 @@ func (p *Provider) videoDetails(ctx context.Context, ids []string) (map[string]y
 	p.mu.Lock()
 	for _, video := range videos {
 		out[video.ID] = video
-		p.videos[video.ID] = cached[youtube.Video]{value: video, expires: now.Add(detailTTL)}
+		put(p.videos, video.ID, video, now, now.Add(detailTTL), maxCachedVideos)
 	}
 	p.mu.Unlock()
 	return out, nil
