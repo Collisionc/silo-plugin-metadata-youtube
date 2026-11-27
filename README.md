@@ -252,10 +252,23 @@ changed in Silo.
 
 ### When another title holds the ID
 
-Silo keeps one entry per IMDb ID. When a lookup finds, for a channel, the ID
-of a title you also have, such as BattleBots' channel beside the BattleBots
-TV show, Silo cannot give it to both. It refuses that refresh of the channel
-and says so in its log:
+Silo keeps one entry per IMDb ID, and takes an IMDb ID as saying which title
+a folder is. So a lookup that finds, for a channel, the ID of a title you
+also have (BattleBots' channel beside the BattleBots TV show) is a hazard,
+and the plugin cannot see what else your libraries hold. **If you keep TV
+shows and their channels on one server, leave IMDb IDs off and tag the
+folders you want.**
+
+The plugin fills a looked-up ID in only when Silo refreshes an entry it has
+already matched, never while Silo is matching a folder (a new folder, or a
+complete refresh of an entry, which matches its folder again). During a
+match Silo would attach the folder to the title that holds the ID: a
+channel's files end up under the TV show, and are moved back with **Split
+Versions** on the show. Choosing a channel by hand with **Match** is not
+protected in this way.
+
+In a refresh, Silo cannot give the ID to both entries. It refuses that
+refresh of the channel and says so in its log:
 
 ```
 refusing to merge matched items series-tvdb-71028 and series-imdb-tt0259128: both have files or library memberships

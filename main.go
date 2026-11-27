@@ -432,6 +432,11 @@ func videoID(ids *structpb.Struct, fallback, filePath string) string {
 	return ""
 }
 
+// matchedFileKey is the key under which Silo sends, among a lookup's provider
+// IDs, the path of the file it is matching (silo-server's
+// internal/metadata/service.go, ModeInitialMatch). A refresh sends none.
+const matchedFileKey = "_filepath"
+
 // ownID is this provider's ID among a lookup's provider IDs.
 func ownID(ids *structpb.Struct) string {
 	return stringMap(ids)[provider.ProviderKey]
@@ -444,8 +449,16 @@ func ownID(ids *structpb.Struct) string {
 // fails the series goes back without an IMDb ID, with a warning.
 //
 // An ID that Silo did not keep is not filled in again (see offerIMDb).
+//
+// Nothing is looked up while Silo is matching a folder, which it marks by
+// sending the file's path among the IDs. To Silo an IMDb ID says which title
+// a folder is: handed BattleBots' channel with tt0259128 during a match, it
+// attached the channel's 350 files to the BattleBots TV show that holds that
+// ID (2026-11-27). In the refresh of an entry it has matched, an ID another
+// title holds is only refused.
 func seriesIMDbID(ctx context.Context, p *provider.Provider, series *provider.Series, requestIDs *structpb.Struct) string {
-	if stringMap(requestIDs)[provider.IMDbKey] != "" {
+	ids := stringMap(requestIDs)
+	if ids[provider.IMDbKey] != "" || ids[matchedFileKey] != "" {
 		return ""
 	}
 	imdb, err := p.IMDbID(ctx, series)

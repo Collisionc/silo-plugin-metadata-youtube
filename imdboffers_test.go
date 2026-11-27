@@ -12,6 +12,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // memoryState stands in for the state Silo keeps for a plugin installation.
@@ -126,6 +129,43 @@ func TestIMDbIDSiloDidNotKeepIsNotFilledInAgain(t *testing.T) {
 	answer.Store("tt4031218")
 	if got := refresh(); got != "tt4031218" {
 		t.Errorf("a different ID: imdb = %v, want tt4031218", got)
+	}
+}
+
+// While Silo matches a folder, which it marks with the file's path among the
+// IDs, no IMDb ID is looked up or filled in: Silo would attach the folder to
+// whichever title holds the ID. The refresh that follows the match gets it.
+func TestIMDbIDIsNotFilledInWhileSiloMatchesAFolder(t *testing.T) {
+	fakeAPI(t)
+	state := fakeState(t)
+	var asked atomic.Int64
+	wd := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		asked.Add(1)
+		_, _ = w.Write([]byte(`{"results":{"bindings":[{"imdb":{"value":"tt0259128"}}]}}`))
+	}))
+	t.Cleanup(wd.Close)
+	previous := wikidataEndpoint
+	wikidataEndpoint = wd.URL
+	t.Cleanup(func() { wikidataEndpoint = previous })
+	s := configuredWith(t, map[string]any{"api_key": "k", "imdb": "wikidata"})
+
+	matching, _ := structpb.NewStruct(map[string]any{
+		"youtube":   brainBreakLand,
+		"_filepath": "/media/Brain Break Land [UCA94TZluH5eQtkQpaCZQfRw]/2024-01-02 - Run [0bNNs5GTru0].mkv",
+		"oshash":    "455e3dd925870b7b",
+	})
+	meta, err := s.GetMetadata(context.Background(), &pluginv1.GetMetadataRequest{ItemType: "series", ProviderIds: matching})
+	if err != nil || meta.GetItem().GetTitle() != "Brain Break Land" {
+		t.Fatalf("match: item = %+v, err = %v", meta.GetItem(), err)
+	}
+	if got := meta.GetItem().GetProviderIds().AsMap(); got["imdb"] != nil || got["youtube"] != brainBreakLand {
+		t.Errorf("match: ids = %v, want the YouTube ID alone", got)
+	}
+	if asked.Load() != 0 || state.writes != 0 {
+		t.Errorf("match: %d Wikidata requests and %d state writes, want none", asked.Load(), state.writes)
+	}
+	if got := seriesIMDb(t, s); got != "tt0259128" {
+		t.Errorf("the refresh after the match: imdb = %v, want tt0259128", got)
 	}
 }
 
