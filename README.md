@@ -269,7 +269,7 @@ channel beside the BattleBots TV show, and Silo treats the two as one:
 So tag a channel only when the IMDb title is the channel itself, a show made
 for YouTube. The official channel of a TV show is not the show.
 
-Until version 0.4.0 the plugin could look IDs up on Wikidata and OMDb. Both
+Builds made between 0.3.0 and 0.4.0 could look IDs up on Wikidata and OMDb. Both
 mostly answer with a TV show's ID for its official channel, and that is how
 the BattleBots case above happened, so the lookups are gone. An entry keeps
 the IMDb ID it has; a wrong one is changed in Silo.
