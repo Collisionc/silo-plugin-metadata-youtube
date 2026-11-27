@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -760,5 +761,55 @@ func TestVideoDetailsAreFetchedAFewCallsAtATime(t *testing.T) {
 	case <-called:
 	case <-time.After(5 * time.Second):
 		t.Fatal("a fetch that was called off did not return")
+	}
+}
+
+// Uploads are listed from a year on when the provider is told to: earlier
+// ones are no episodes, and an uploads playlist, which runs from the newest
+// upload back, is fetched only as far as that year.
+func TestUploadsAreListedFromAYear(t *testing.T) {
+	ctx := context.Background()
+	list := func(from UploadsFrom, id string) (ids []string, calls int) {
+		t.Helper()
+		p, fake := newTestProvider(t)
+		p.from = from
+		series, err := p.SeriesByID(ctx, id)
+		if err != nil || series == nil {
+			t.Fatalf("series %s: %v", id, err)
+		}
+		listing, err := p.Listing(ctx, series)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, upload := range listing {
+			ids = append(ids, upload.VideoID)
+		}
+		return ids, fake.count("playlistItems")
+	}
+
+	if ids, calls := list(UploadsFrom{}, channelID); len(ids) != 5 || calls != 2 {
+		t.Errorf("every upload: %v in %d calls, want 5 in 2", ids, calls)
+	}
+	if ids, calls := list(UploadsFrom{Year: 2024}, channelID); !slices.Equal(ids, []string{"0bNNs5GTru0", "lateday0102", "newestvid01"}) || calls != 2 {
+		t.Errorf("from 2024: %v in %d calls, want the three since in 2", ids, calls)
+	}
+	// The first page is all more than a month before 2026: the second is not fetched.
+	if ids, calls := list(UploadsFrom{Year: 2026}, channelID); len(ids) != 0 || calls != 1 {
+		t.Errorf("from 2026: %v in %d calls, want none in 1", ids, calls)
+	}
+	// A playlist is in its owner's order, so it is read to the end.
+	if ids, calls := list(UploadsFrom{Year: 2026}, playlistID); len(ids) != 0 || calls != 2 {
+		t.Errorf("a playlist from 2026: %v in %d calls, want none in 2", ids, calls)
+	}
+	// A channel's own year wins, for its uploads playlist too; 0 is every upload.
+	own := UploadsFrom{Year: 2026, ByID: map[string]int{channelID: 0, playlistID: 2025}}
+	if ids, _ := list(own, channelID); len(ids) != 5 {
+		t.Errorf("the channel whole: %v, want 5", ids)
+	}
+	if ids, _ := list(own, uploadsID); len(ids) != 5 {
+		t.Errorf("its uploads playlist whole: %v, want 5", ids)
+	}
+	if ids, _ := list(own, playlistID); !slices.Equal(ids, []string{"newestvid01"}) {
+		t.Errorf("the playlist from 2025: %v", ids)
 	}
 }

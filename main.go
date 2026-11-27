@@ -44,6 +44,8 @@ type runtimeServer struct {
 // settings are the values of the plugin's "youtube" config entry.
 type settings struct {
 	apiKey, timezone, seasons, backdrop string
+	// how far back uploads are listed (uploadsfrom.go)
+	uploadsFromYear, uploadsFromByID string
 }
 
 func readSettings(entries []*pluginv1.ConfigEntry) settings {
@@ -54,10 +56,18 @@ func readSettings(entries []*pluginv1.ConfigEntry) settings {
 		}
 		values := entry.GetValue().AsMap()
 		text := func(key string) string {
-			v, _ := values[key].(string)
-			return strings.TrimSpace(v)
+			switch v := values[key].(type) {
+			case string:
+				return strings.TrimSpace(v)
+			case float64: // a number typed into a text field can arrive as one
+				return strconv.FormatFloat(v, 'f', -1, 64)
+			}
+			return ""
 		}
-		out = settings{apiKey: text("api_key"), timezone: text("timezone"), seasons: text("seasons"), backdrop: text("backdrop")}
+		out = settings{
+			apiKey: text("api_key"), timezone: text("timezone"), seasons: text("seasons"), backdrop: text("backdrop"),
+			uploadsFromYear: text("uploads_from"), uploadsFromByID: text("uploads_from_by_id"),
+		}
 	}
 	return out
 }
@@ -79,9 +89,14 @@ func (s *runtimeServer) configure(_ context.Context, entries []*pluginv1.ConfigE
 		logger.Warn("youtube: unknown time zone, using UTC", "timezone", config.timezone, "error", err)
 		loc = time.UTC
 	}
+	from, problems := config.uploadsFrom()
+	for _, problem := range problems {
+		logger.Warn("youtube: a setting for how far back uploads are listed is ignored: " + problem)
+	}
 	options := []provider.Option{
 		provider.WithSeasonMode(provider.ParseSeasonMode(config.seasons)),
 		provider.WithBackdrop(provider.ParseBackdrop(config.backdrop)),
+		provider.WithUploadsFrom(from),
 	}
 	p := provider.New(youtube.NewClient(youtubeBaseURL, config.apiKey, nil), loc, options...)
 	s.mu.Lock()
@@ -110,6 +125,9 @@ func (configurationChecks) TestConfiguration(ctx context.Context, req *pluginv1.
 	}
 	if _, err := config.location(); err != nil {
 		return failed(fmt.Sprintf("%q is not a time zone name. Use an IANA name such as America/New_York, or leave it empty for UTC.", config.timezone))
+	}
+	if _, problems := config.uploadsFrom(); len(problems) > 0 {
+		return failed(strings.Join(problems, " "))
 	}
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()

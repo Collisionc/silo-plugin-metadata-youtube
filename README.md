@@ -118,6 +118,34 @@ Dates are compared in UTC, as yt-dlp and TubeSync write them. If your
 downloader dates files in local time, set **Upload date time zone** to match;
 otherwise a video uploaded near midnight links to no episode.
 
+## Listing only what you have
+
+Silo learns about every upload of a channel, the ones you have not
+downloaded too: those are episodes without a file. For a channel you follow
+from last year on that can be thousands, each fetched from YouTube and sent
+to Silo at every refresh.
+
+**List uploads from** is the first year whose uploads become episodes, for
+every channel and playlist; empty lists them all. **List uploads from, by
+channel** gives one channel or playlist its own year, one entry to a line:
+
+```
+UCuk26DMu7ewAkC-ntx7esiA=2023
+UC7XraaeLVbH_vrA39sO5pmA=all
+```
+
+- Set a year no later than your oldest download from that channel. A file
+  from an earlier year links to no episode.
+- It is a year, not "the last two years": a limit that moved would drop the
+  episodes of files you still have.
+- A channel is read from its newest upload back, so a year also saves
+  quota: the listing stops there. A playlist is in its owner's order and is
+  read to the end.
+- Episode numbers do not change: a day's uploads are numbered among
+  themselves.
+- **Check Connection** names an entry it cannot read. Saved anyway, such an
+  entry is ignored, with a warning in Silo's log.
+
 ## Single videos as movies
 
 A channel folder suits a channel you follow: Silo lists every upload, the
@@ -241,7 +269,10 @@ the IMDb ID it has; a wrong one is changed in Silo.
    season per year or one season; **Backdrop** chooses the series background
    art: none (the default, as banners and thumbnails carry lettering that
    makes the description hard to read), the channel banner, or the newest
-   video's thumbnail. **Check Connection** tries the key
+   video's thumbnail. **List uploads from** leaves out the uploads from
+   before the downloads you keep
+   ([Listing only what you have](#listing-only-what-you-have)).
+   **Check Connection** tries the key
    with one call (1 quota unit) and says what to fix if YouTube refuses it.
 4. Keep the channels in a TV library of their own, and in that library
    enable **YouTube** as the only series metadata provider: turn TVDB and TMDB
@@ -395,8 +426,6 @@ Pushing a `v*` tag builds the binaries and publishes a GitHub release.
 ## Notes
 
 - Shorts and past live streams are uploads like any other and become episodes.
-  Silo learns about every upload, including the ones you have not
-  downloaded; those are episodes without a file.
 - Private and deleted videos are left out; a video deleted after its listing
   keeps the title it was listed with.
 - Please respect the [YouTube Terms of Service](https://www.youtube.com/t/terms).

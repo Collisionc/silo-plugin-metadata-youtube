@@ -75,6 +75,10 @@ type Provider struct {
 	videos   map[string]cached[youtube.Video]
 	// searches holds the channel IDs a free-text search found, by query.
 	searches map[string]cached[[]string]
+
+	// from is the first year whose uploads are listed; the zero value lists
+	// them all.
+	from UploadsFrom
 }
 
 type cached[T any] struct {
@@ -127,6 +131,32 @@ type Option func(*Provider)
 
 // WithSeasonMode sets how uploads are split into seasons.
 func WithSeasonMode(mode SeasonMode) Option { return func(p *Provider) { p.mode = mode } }
+
+// UploadsFrom says how far back a series' uploads are listed. A channel
+// followed from some year on has files from that year on; the uploads before
+// it would be episodes without a file, thousands of them for an old channel,
+// each fetched and sent to Silo at every refresh.
+type UploadsFrom struct {
+	// Year is the first year listed, in the provider's time zone; 0 lists
+	// every upload.
+	Year int
+	// ByID gives a channel (UC...) or a playlist its own first year, 0 for
+	// every upload. A channel's applies to its uploads playlist too.
+	ByID map[string]int
+}
+
+// firstYear is the first year of uploads listed for a series; 0 for all.
+func (u UploadsFrom) firstYear(series *Series) int {
+	for _, id := range []string{series.ID, channelForUploads(series.ID)} {
+		if year, ok := u.ByID[id]; ok && id != "" {
+			return year
+		}
+	}
+	return u.Year
+}
+
+// WithUploadsFrom lists uploads from a year on.
+func WithUploadsFrom(from UploadsFrom) Option { return func(p *Provider) { p.from = from } }
 
 // WithBackdrop sets the series background art.
 func WithBackdrop(backdrop Backdrop) Option { return func(p *Provider) { p.backdrop = backdrop } }
@@ -692,25 +722,46 @@ func (p *Provider) fetchListing(ctx context.Context, series *Series) ([]Numbered
 	}
 	p.mu.Unlock()
 
+	// The first moment listed, when uploads are listed from a year on.
+	var from time.Time
+	if year := p.from.firstYear(series); year > 0 {
+		from = time.Date(year, time.January, 1, 0, 0, 0, 0, p.loc)
+	}
+	// An uploads playlist runs from the newest upload back, so its pages
+	// need fetching only as far as that moment: the listing stops at the
+	// first page that is a month older throughout. (A month, since a video
+	// published long after it was uploaded sits a little out of order.)
+	// Any other playlist is in the order its owner gave it.
+	newestFirst := strings.HasPrefix(series.PlaylistID, "UU")
+	enough := func(page youtube.PlaylistPage) bool {
+		return newestFirst && !from.IsZero() && allBefore(page.Items, from.AddDate(0, -1, 0))
+	}
 	items := first.Items
 	next := first.Next
-	for page := 1; next != "" && page < youtube.MaxPlaylistPages; page++ {
+	for page := 1; next != "" && page < youtube.MaxPlaylistPages && !enough(first); page++ {
 		more, err := p.yt.PlaylistPage(ctx, series.PlaylistID, next)
 		if err != nil {
 			return nil, err
 		}
 		items = append(items, more.Items...)
 		next = more.Next
+		if enough(more) {
+			break
+		}
 	}
 	uploads := make([]Upload, 0, len(items))
 	for _, item := range items {
 		if !listable(item) {
 			continue
 		}
+		published := youtube.ParseTime(item.ContentDetails.VideoPublishedAt)
+		if published.Before(from) {
+			continue
+		}
 		uploads = append(uploads, Upload{
 			VideoID:   item.ContentDetails.VideoID,
 			Title:     item.Snippet.Title,
-			Published: youtube.ParseTime(item.ContentDetails.VideoPublishedAt),
+			Published: published,
 		})
 	}
 	numbered := Number(uploads, p.loc, p.mode)
@@ -719,6 +770,23 @@ func (p *Provider) fetchListing(ctx context.Context, series *Series) ([]Numbered
 	put(p.listings, series.ID, listing{uploads: numbered, listed: now, total: first.Total, head: pageHead(first)}, now, now.Add(listingTTL), maxCachedListings)
 	p.mu.Unlock()
 	return numbered, nil
+}
+
+// allBefore reports whether every entry of a page that has a publish time was
+// published before t, and at least one has.
+func allBefore(items []youtube.PlaylistItem, t time.Time) bool {
+	dated := false
+	for _, item := range items {
+		published := youtube.ParseTime(item.ContentDetails.VideoPublishedAt)
+		if published.IsZero() {
+			continue
+		}
+		if !published.Before(t) {
+			return false
+		}
+		dated = true
+	}
+	return dated
 }
 
 // listable drops entries for videos that are private or deleted: they keep a

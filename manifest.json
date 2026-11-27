@@ -56,7 +56,7 @@
       "title": "YouTube",
       "description": "YouTube Data API access",
       "required": false,
-      "json_schema": "{\"type\":\"object\",\"properties\":{\"api_key\":{\"type\":\"string\"},\"timezone\":{\"type\":\"string\"},\"seasons\":{\"type\":\"string\",\"enum\":[\"year\",\"single\"]},\"backdrop\":{\"type\":\"string\",\"enum\":[\"none\",\"banner\",\"video\"]},\"imdb\":{\"type\":\"string\"},\"omdb_api_key\":{\"type\":\"string\"}},\"additionalProperties\":false}",
+      "json_schema": "{\"type\":\"object\",\"properties\":{\"api_key\":{\"type\":\"string\"},\"timezone\":{\"type\":\"string\"},\"seasons\":{\"type\":\"string\",\"enum\":[\"year\",\"single\"]},\"backdrop\":{\"type\":\"string\",\"enum\":[\"none\",\"banner\",\"video\"]},\"imdb\":{\"type\":\"string\"},\"omdb_api_key\":{\"type\":\"string\"},\"uploads_from\":{\"type\":\"string\"},\"uploads_from_by_id\":{\"type\":\"string\"}},\"additionalProperties\":false}",
       "admin_form": {
         "fields": [
           {
@@ -110,6 +110,20 @@
                 "label": "Newest video's thumbnail"
               }
             ]
+          },
+          {
+            "key": "uploads_from",
+            "label": "List uploads from",
+            "description": "The first year whose uploads become episodes, for every channel and playlist. Empty lists every upload, which for a channel you follow from last year on means thousands of episodes without a file. Set it no later than the year of your oldest download: a file from an earlier year links to no episode.",
+            "control": "ADMIN_FORM_CONTROL_TEXT",
+            "placeholder": "Every upload"
+          },
+          {
+            "key": "uploads_from_by_id",
+            "label": "List uploads from, by channel",
+            "description": "A year for one channel or playlist, where it differs from the setting above: its ID, =, and the year, one to a line, such as UCuk26DMu7ewAkC-ntx7esiA=2023. Use =all for a channel you have downloaded whole.",
+            "control": "ADMIN_FORM_CONTROL_TEXTAREA",
+            "placeholder": "UCuk26DMu7ewAkC-ntx7esiA=2023"
           }
         ]
       }
