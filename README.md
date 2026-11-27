@@ -75,9 +75,11 @@ passes plugins the folder name only.
 **The episodes.** Each year with uploads is a season. A video's episode number
 is `MMDDxx`: month, day, and its place among that day's uploads, from `01`.
 January 2nd's first upload is `S2024E10201`, its second `S2024E10202`. New
-uploads never renumber older episodes. The numbers only put the videos in
-order, so the plugin asks Silo's clients to label each episode with its
-upload date instead.
+uploads never renumber older episodes. A video that is deleted or made
+private does, a little: the later uploads of its own day each move up one
+number, and whatever Silo keeps against an episode's number then sits on
+the next video. The numbers only put the videos in order, so the plugin asks
+Silo's clients to label each episode with its upload date instead.
 
 With **Seasons** set to **One season**, every video is in season 1 and the
 year leads the number instead: `S1E2024010201`. Changing the setting
@@ -98,7 +100,18 @@ YouTube/
     2023-05-06 - First Video [yyyyyyyyyyy].mkv
 ```
 
-Two uploads on the same day are told apart by the title in the file name.
+A day with one upload needs nothing more. Two uploads on the same day are
+told apart by the title in the file name, which Silo compares with the
+episodes' titles, and that has limits the plugin cannot lift:
+
+- two videos of one day with the **same title**, as a Short and the full
+  video often have, cannot be told apart, and neither file is linked;
+- Silo reads a file's title only as far as the first `[` or `{`, or a
+  release term such as `1080p`, `HDR` or `x264`. A video called
+  `Marble Race [Race 1 - 3]` is read as `Marble Race`, which is no
+  episode's title, so on a day with a second upload its file is not linked.
+
+Silo's log names such files in `skipped ambiguous air-date episode links`.
 Season folders are optional.
 
 The video ID in a file's name can be in square or curly brackets, alone or
@@ -290,7 +303,11 @@ the IMDb ID it has; a wrong one is changed in Silo.
    affected. Putting YouTube first in the chain is not enough: Silo's
    automatic matching sets aside every candidate without a TVDB, TMDB or IMDb
    ID as soon as any provider returns one, so a TV show that shares a
-   channel's name would win, or leave the channel unmatched.
+   channel's name would win, or leave the channel unmatched. A library that
+   TVDB or TMDB matched before keeps what they gave it: a series with a
+   TVDB ID still has TVDB's episodes beside YouTube's, and Silo links a
+   dated file to the TVDB episode first. Such a series shows two sets of
+   episodes until its TVDB and TMDB IDs are removed in Silo.
 5. For [single videos](#single-videos-as-movies), make a movie library of
    their own the same way, with **YouTube** as its only movie metadata
    provider.
