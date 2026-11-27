@@ -455,7 +455,7 @@ once.
 ```sh
 go test ./...
 make build-all
-# Against the real API, about 110 units:
+# Against the real API, about 115 units:
 YOUTUBE_API_KEY=... go test -run TestLive -v ./provider/
 ```
 

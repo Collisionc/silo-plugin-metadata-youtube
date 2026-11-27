@@ -16,7 +16,7 @@ import (
 )
 
 // TestLive checks the plugin against the real YouTube Data API. It runs only
-// when YOUTUBE_API_KEY is set, and spends about 110 quota units:
+// when YOUTUBE_API_KEY is set, and spends about 115 quota units:
 //
 //	YOUTUBE_API_KEY=... go test -run TestLive -v ./provider/
 func TestLive(t *testing.T) {
@@ -26,7 +26,9 @@ func TestLive(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
-	p := New(youtube.NewClient("", key, nil), time.UTC)
+	usage := &youtube.Usage{}
+	client := youtube.NewClient("", key, nil).CountInto(usage)
+	p := New(client, time.UTC)
 
 	hits, err := p.Search(ctx, "Brain Break Land", nil)
 	if err != nil {
@@ -75,6 +77,38 @@ func TestLive(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("2024 has %d episodes but not 0bNNs5GTru0", len(episodes))
+	}
+
+	// The calls the above did not make, each with its own field selection:
+	// the key check, a video as a movie, a handle and a playlist. YouTube
+	// refuses a selection it cannot read with HTTP 400, so an error here is
+	// the plugin's; a handle or playlist that no longer exists is not.
+	if err := client.CheckKey(ctx); err != nil {
+		t.Errorf("key check: %v", err)
+	}
+	movie, err := p.Movie(ctx, "0bNNs5GTru0")
+	if err != nil || movie == nil || movie.Title == "" || movie.Year != 2024 || movie.Thumbnail.URL == "" || movie.ChannelID != channelID {
+		t.Errorf("movie = %+v, err = %v", movie, err)
+	}
+	for _, query := range []string{"@brainbreakland", "Some Playlist [" + playlistID + "]"} {
+		hits, err := p.Search(ctx, query, nil)
+		if err != nil {
+			t.Errorf("%q: %v", query, err)
+			continue
+		}
+		t.Logf("%q: %d hits", query, len(hits))
+	}
+
+	// A listing an hour old is checked by its first page, one call, when
+	// YouTube gives the playlist's size and the page is as it was.
+	total, byCall := usage.Take()
+	t.Logf("so far: %d quota units (%s)", total, byCall)
+	p.now = func() time.Time { return time.Now().Add(listingTTL + time.Minute) }
+	if _, err := p.Seasons(ctx, channelID); err != nil {
+		t.Fatalf("seasons, an hour on: %v", err)
+	}
+	if total, byCall := usage.Take(); byCall != "playlistItems=1" {
+		t.Errorf("checking the listing cost %d units (%s), want playlistItems=1", total, byCall)
 	}
 }
 
