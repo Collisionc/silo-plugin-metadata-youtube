@@ -26,14 +26,15 @@ type capturedLog struct {
 func captureLog(t *testing.T) *capturedLog {
 	t.Helper()
 	captured := &capturedLog{buffer: &bytes.Buffer{}}
-	previousLogger, previousLookups := logger, lookups
+	previousLogger, previousLookups, previousQuota := logger, lookups, quota
 	logger = newLogger(captured.buffer)
 	lookups = newLookupLog()
+	quota = &youtube.Usage{}
 	lookups.after = func(wait time.Duration, run func()) {
 		captured.waits = append(captured.waits, wait)
 		captured.tally = run
 	}
-	t.Cleanup(func() { logger, lookups = previousLogger, previousLookups })
+	t.Cleanup(func() { logger, lookups, quota = previousLogger, previousLookups, previousQuota })
 	return captured
 }
 
@@ -229,5 +230,34 @@ func TestFailedLookupsSayWhy(t *testing.T) {
 	}
 	if len(tallies) != 1 || tallies[0]["by_kind_and_outcome"] != "GetEpisodes:error(ResourceExhausted)=3 GetEpisodes:error(Unavailable)=1" {
 		t.Errorf("tallies = %v", tallies)
+	}
+}
+
+// The tally says what its spell cost in quota units, by call, and what the
+// plug-in has spent since it started.
+func TestTallyCountsQuotaUnits(t *testing.T) {
+	log := captureLog(t)
+	fakeAPI(t)
+	s := configured(t)
+	ids, _ := structpb.NewStruct(map[string]any{"youtube": "UCA94TZluH5eQtkQpaCZQfRw"})
+	if _, err := s.GetEpisodes(context.Background(), &pluginv1.GetEpisodesRequest{ProviderIds: ids, SeasonNumber: 2024}); err != nil {
+		t.Fatal(err)
+	}
+	log.tally()
+	lines := log.lines(t)
+	last := lines[len(lines)-1]
+	if last["quota_units"] != float64(3) || last["quota_by_call"] != "channels=1 playlistItems=1 videos=1" || last["quota_units_since_start"] != float64(3) {
+		t.Errorf("tally = %v, want 3 units: the channel, its listing and the video", last)
+	}
+
+	// Answered from what is kept: a lookup, and no units.
+	if _, err := s.GetEpisodes(context.Background(), &pluginv1.GetEpisodesRequest{ProviderIds: ids, SeasonNumber: 2024}); err != nil {
+		t.Fatal(err)
+	}
+	log.tally()
+	lines = log.lines(t)
+	last = lines[len(lines)-1]
+	if last["quota_units"] != float64(0) || last["quota_by_call"] != "" || last["quota_units_since_start"] != float64(3) {
+		t.Errorf("second tally = %v, want no units and 3 since the start", last)
 	}
 }

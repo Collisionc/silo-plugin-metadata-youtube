@@ -13,7 +13,9 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -36,6 +38,63 @@ type Client struct {
 	http    *http.Client
 	// backoff is the wait before retry n (1-based); tests shorten it.
 	backoff func(attempt int) time.Duration
+	// usage, when set, counts the quota units the client's calls cost.
+	usage *Usage
+}
+
+// Usage counts the quota units spent, by the API resource called. The API
+// does not say what a key has left; this is the plugin's own count of what
+// it asked for, which the Google Cloud console shows for the whole key.
+type Usage struct {
+	mu    sync.Mutex
+	units map[string]int
+}
+
+// searchCost is what one search.list call costs; every other call the
+// plugin makes costs 1.
+const searchCost = 100
+
+func (u *Usage) add(resource string) {
+	if u == nil {
+		return
+	}
+	cost := 1
+	if resource == "search" {
+		cost = searchCost
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.units == nil {
+		u.units = make(map[string]int)
+	}
+	u.units[resource] += cost
+}
+
+// Take returns the units counted since the last Take, in all and by
+// resource ("playlistItems=120 videos=118"), and starts the count again.
+func (u *Usage) Take() (total int, byCall string) {
+	u.mu.Lock()
+	units := u.units
+	u.units = nil
+	u.mu.Unlock()
+	names := make([]string, 0, len(units))
+	for name, n := range units {
+		names = append(names, name)
+		total += n
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, fmt.Sprintf("%s=%d", name, units[name]))
+	}
+	return total, strings.Join(parts, " ")
+}
+
+// CountInto makes the client count what its calls cost into usage, and
+// returns the client.
+func (c *Client) CountInto(usage *Usage) *Client {
+	c.usage = usage
+	return c
 }
 
 // NewClient returns a client for baseURL (DefaultBaseURL when empty).
@@ -158,11 +217,17 @@ func (c *Client) get(ctx context.Context, resource string, params url.Values, de
 		}
 		err := c.do(ctx, endpoint, dest)
 		if err == nil {
+			c.usage.add(resource)
 			return nil
 		}
 		lastErr = err
 		var apiErr *APIError
 		if errors.As(err, &apiErr) {
+			// An answer the API gave costs its units, an error too; a call
+			// refused because the quota is spent costs none.
+			if !apiErr.QuotaExceeded() {
+				c.usage.add(resource)
+			}
 			if !apiErr.retryable() {
 				return err
 			}

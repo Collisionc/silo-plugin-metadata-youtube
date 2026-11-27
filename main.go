@@ -35,6 +35,10 @@ const configKey = "youtube"
 // youtubeBaseURL is replaced by tests.
 var youtubeBaseURL = youtube.DefaultBaseURL
 
+// quota counts the quota units every client of the plugin spends; the tally
+// of each busy spell says how many (lookupLog.logTally).
+var quota = &youtube.Usage{}
+
 // runtimeServer holds the provider built from the plugin's settings.
 type runtimeServer struct {
 	mu       sync.RWMutex
@@ -99,7 +103,7 @@ func (s *runtimeServer) configure(_ context.Context, entries []*pluginv1.ConfigE
 		provider.WithUploadsFrom(from),
 		provider.WithWarnings(func(msg string, keyvals ...any) { logger.Warn(msg, keyvals...) }),
 	}
-	p := provider.New(youtube.NewClient(youtubeBaseURL, config.apiKey, nil), loc, options...)
+	p := provider.New(youtube.NewClient(youtubeBaseURL, config.apiKey, nil).CountInto(quota), loc, options...)
 	s.mu.Lock()
 	s.provider = p
 	s.mu.Unlock()
@@ -132,7 +136,7 @@ func (configurationChecks) TestConfiguration(ctx context.Context, req *pluginv1.
 	}
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
-	err := youtube.NewClient(youtubeBaseURL, config.apiKey, &http.Client{Timeout: checkTimeout}).CheckKey(ctx)
+	err := youtube.NewClient(youtubeBaseURL, config.apiKey, &http.Client{Timeout: checkTimeout}).CountInto(quota).CheckKey(ctx)
 	if err == nil {
 		return &pluginv1.TestConfigurationResponse{Ok: true}, nil
 	}

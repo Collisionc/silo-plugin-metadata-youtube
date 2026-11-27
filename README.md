@@ -345,6 +345,11 @@ other form is shown at debug level only, which Silo's log does not keep.
 - `youtube: what Silo asked in 5 minutes`: the lookups of a busy spell,
   counted by call and outcome, a failure by its kind
   (`GetEpisodes:error(ResourceExhausted)=3` is three refused for quota).
+  With them, what the spell cost: `quota_units`, by call in `quota_by_call`
+  (`playlistItems=120 videos=118`), and `quota_units_since_start` for the
+  plugin's run so far. This is the plugin's own count of what it asked for.
+  Other users of the same key do not show in it; the Google Cloud console
+  has the key's whole day.
 - `youtube: episodes went back without their descriptions, runtimes and
   thumbnails`, a warning: Silo's 30 seconds ran out while a large channel's
   video details were being fetched. The episodes went back with titles and

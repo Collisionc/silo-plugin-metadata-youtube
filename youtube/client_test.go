@@ -105,3 +105,43 @@ func TestEveryCallNamesItsFields(t *testing.T) {
 		}
 	}
 }
+
+// The client counts what its calls cost: a unit each, 100 for a search, an
+// error the API answers too, and nothing for a call refused for quota or
+// one that reached no server.
+func TestUsageCountsQuotaUnits(t *testing.T) {
+	refuse := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if refuse != "" {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte(`{"error":{"code":403,"message":"no","errors":[{"reason":"` + refuse + `"}]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"items":[]}`))
+	}))
+	usage := &Usage{}
+	c := NewClient(server.URL, "k", server.Client()).CountInto(usage)
+	c.backoff = func(int) time.Duration { return 0 }
+	ctx := context.Background()
+
+	_, _ = c.Channels(ctx, []string{checkKeyChannel})
+	_, _ = c.PlaylistPage(ctx, "UUBR8-60-B28hp2BmDPdntcQ", "")
+	_, _ = c.PlaylistPage(ctx, "UUBR8-60-B28hp2BmDPdntcQ", "page2")
+	_, _ = c.SearchChannels(ctx, "name", 5)
+	if total, byCall := usage.Take(); total != 103 || byCall != "channels=1 playlistItems=2 search=100" {
+		t.Errorf("usage = %d (%s), want 103 (channels=1 playlistItems=2 search=100)", total, byCall)
+	}
+	if total, byCall := usage.Take(); total != 0 || byCall != "" {
+		t.Errorf("taken twice: %d (%s), want nothing", total, byCall)
+	}
+
+	refuse = "playlistItemsNotAccessible"
+	_, _ = c.PlaylistPage(ctx, "PLprivate0000000000", "")
+	refuse = "quotaExceeded"
+	_, _ = c.Videos(ctx, []string{"0bNNs5GTru0"})
+	server.Close()
+	_, _ = c.Videos(ctx, []string{"0bNNs5GTru0"})
+	if total, byCall := usage.Take(); total != 1 || byCall != "playlistItems=1" {
+		t.Errorf("after an error, a quota refusal and an outage: %d (%s), want playlistItems=1", total, byCall)
+	}
+}

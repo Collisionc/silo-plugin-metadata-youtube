@@ -59,6 +59,8 @@ type lookupLog struct {
 	sampled map[string]int
 	pending bool
 	after   func(time.Duration, func())
+	// spent is the quota units counted since the plug-in started.
+	spent int
 }
 
 func newLookupLog() *lookupLog {
@@ -132,7 +134,15 @@ func (l *lookupLog) logTally() {
 	for _, key := range keys {
 		parts = append(parts, fmt.Sprintf("%s=%d", key, tally[key]))
 	}
-	logger.Info("youtube: what Silo asked in 5 minutes", "lookups", total, "by_kind_and_outcome", strings.Join(parts, " "))
+	// What the spell cost, as the plugin counted it: the calls answering these
+	// lookups, and any a listing made in the background since the last tally.
+	units, byCall := quota.Take()
+	l.mu.Lock()
+	l.spent += units
+	spent := l.spent
+	l.mu.Unlock()
+	logger.Info("youtube: what Silo asked in 5 minutes", "lookups", total, "by_kind_and_outcome", strings.Join(parts, " "),
+		"quota_units", units, "quota_by_call", byCall, "quota_units_since_start", spent)
 }
 
 // outcomeOf names what a lookup came to from what it was asked about and how
