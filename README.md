@@ -104,7 +104,7 @@ otherwise a video uploaded near midnight links to no episode.
    build provenance attestation; to check that a download was built by this
    repository's release workflow:
    `gh attestation verify plugin-linux-amd64 --repo Collisionc/silo-plugin-metadata-youtube`.
-   To build it yourself: `make build-all`.
+   To build it yourself, see [Building from source](#building-from-source).
 3. Under the plugin's settings, enter the API key. **Seasons** chooses a
    season per year or one season; **Backdrop** chooses the series background
    art: none (the default, as banners and thumbnails carry lettering that
@@ -149,6 +149,72 @@ other form is shown at debug level only, which Silo's log does not keep.
   the refresh sent.
 - `youtube: what Silo asked in 5 minutes`: the lookups of a busy spell,
   counted by call and outcome.
+
+## Building from source
+
+You need only [Go](https://go.dev/dl/), version 1.26 or newer. You can build
+on Windows, macOS or Linux, whatever your Silo server runs on: Go builds for
+another platform as readily as for its own.
+
+1. **Install Go.** Download the installer for the computer you are building
+   on from [go.dev/dl](https://go.dev/dl/) and run it. Then open a new
+   terminal (PowerShell on Windows) and check it:
+
+   ```sh
+   go version
+   ```
+
+   It should print `go version go1.26` or later.
+
+2. **Get the source.** On the
+   [repository's GitHub page](https://github.com/Collisionc/silo-plugin-metadata-youtube)
+   choose **Code > Download ZIP**, extract it, and open a terminal in the
+   extracted folder. Or, if you have [Git](https://git-scm.com/downloads):
+
+   ```sh
+   git clone https://github.com/Collisionc/silo-plugin-metadata-youtube.git
+   cd silo-plugin-metadata-youtube
+   ```
+
+3. **Pick your server's platform.** This is where Silo runs, not where you
+   build:
+
+   | Silo server | `GOOS` | `GOARCH` |
+   | --- | --- | --- |
+   | Linux on Intel or AMD (most servers) | `linux` | `amd64` |
+   | Linux on 64-bit ARM, such as a Raspberry Pi 4 or 5 with a 64-bit OS | `linux` | `arm64` |
+   | macOS on Apple silicon | `darwin` | `arm64` |
+
+   Silo in Docker counts as Linux, on the host's processor.
+
+4. **Build.** These commands build for `linux` and `amd64`. For another
+   platform, change the two values and the file name to match, for example
+   `dist/plugin-linux-arm64`.
+
+   macOS or Linux:
+
+   ```sh
+   GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o dist/plugin-linux-amd64 .
+   ```
+
+   Windows (PowerShell):
+
+   ```powershell
+   $env:GOOS = 'linux'; $env:GOARCH = 'amd64'; $env:CGO_ENABLED = '0'
+   go build -trimpath -ldflags="-s -w" -o dist/plugin-linux-amd64 .
+   ```
+
+   The first build downloads the plugin's dependencies, so it needs an
+   internet connection. On Windows, close the PowerShell window afterwards:
+   the three settings last as long as it stays open, and would apply to any
+   later `go` command in it.
+
+5. **Install it.** The plugin is the single file `dist/plugin-linux-amd64`.
+   Upload it under **Admin > Plugins** and carry on from step 3 of
+   [Setup](#setup).
+
+With `make` and a POSIX shell, `make build-all` builds all three platforms at
+once.
 
 ## Development
 
