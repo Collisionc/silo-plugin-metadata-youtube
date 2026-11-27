@@ -34,6 +34,11 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # Known vulnerabilities in the code paths the plugin actually calls, in
+      # its modules and in the Go release that builds it (go.mod's toolchain).
+      - name: Vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
       - name: Test
         run: go test ./...
 

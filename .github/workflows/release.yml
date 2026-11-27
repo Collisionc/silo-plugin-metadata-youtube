@@ -28,6 +28,9 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Vulnerabilities
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
       - name: Build
         run: |
           version="${GITHUB_REF_NAME#v}"
