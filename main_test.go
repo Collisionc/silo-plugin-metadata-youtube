@@ -60,6 +60,7 @@ var fakeAPICalls atomic.Int64
 
 func fakeAPI(t *testing.T) {
 	t.Helper()
+	fakeState(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fakeAPICalls.Add(1)
 		w.Header().Set("Content-Type", "application/json")

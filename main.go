@@ -442,6 +442,8 @@ func ownID(ids *structpb.Struct) string {
 // already has an IMDb ID (from an {imdb-tt...} folder tag, or an earlier
 // refresh) keeps it and is not looked up. The lookup is an extra: when it
 // fails the series goes back without an IMDb ID, with a warning.
+//
+// An ID that Silo did not keep is not filled in again (see offerIMDb).
 func seriesIMDbID(ctx context.Context, p *provider.Provider, series *provider.Series, requestIDs *structpb.Struct) string {
 	if stringMap(requestIDs)[provider.IMDbKey] != "" {
 		return ""
@@ -449,6 +451,21 @@ func seriesIMDbID(ctx context.Context, p *provider.Provider, series *provider.Se
 	imdb, err := p.IMDbID(ctx, series)
 	if err != nil {
 		logger.Warn("youtube: could not look the IMDb ID up", "series", series.ID, "error", err)
+		return ""
+	}
+	if imdb == "" {
+		return ""
+	}
+	fill, notKept, first, err := offerIMDb(ctx, series.ID, imdb)
+	switch {
+	case err != nil:
+		logger.Warn("youtube: could not record the IMDb ID found for a series in Silo's plugin state; it is not filled in",
+			"series", series.ID, "imdb", imdb, "error", err)
+	case notKept:
+		logger.Warn("youtube: Silo did not keep the IMDb ID filled into a series' entry, so another title holds it or it was removed; it is not filled in again",
+			"series", series.ID, "name", series.Title, "imdb", imdb, "first_filled_in", first.UTC().Format(time.RFC3339))
+	}
+	if !fill {
 		return ""
 	}
 	return imdb

@@ -216,8 +216,9 @@ channel, which is why the setting is off by default.
   is used.
 - A TV show's official channel gets the show's IMDb ID: Saturday Night
   Live's channel gets `tt0072562`. Other plugins then treat the channel as
-  the show. Leave the setting off, or tag the folder yourself, if you keep
-  both and want them apart.
+  the show. If the show itself is in one of your libraries, the channel
+  cannot have the ID: see
+  [When another title holds the ID](#when-another-title-holds-the-id).
 - An entry that already has an IMDb ID keeps it.
 
 **OMDb, by the channel's name.** Set **IMDb IDs** to **Search OMDb by
@@ -245,6 +246,32 @@ wrong ID only shows in what other plugins then do with the entry.
 A wrong ID is not corrected by turning the setting off: an entry keeps the
 IMDb ID it has, and the plugin never removes or replaces one. It has to be
 changed in Silo.
+
+### When another title holds the ID
+
+Silo keeps one entry per IMDb ID. When a lookup finds, for a channel, the ID
+of a title you also have, such as BattleBots' channel beside the BattleBots
+TV show, Silo cannot give it to both. It refuses that refresh of the channel
+and says so in its log:
+
+```
+refusing to merge matched items series-tvdb-71028 and series-imdb-tt0259128: both have files or library memberships
+```
+
+The plugin notices: it records each ID it fills in, in the state Silo keeps
+for the plugin, and when Silo asks about the series again more than five
+minutes later and the entry still has no IMDb ID, it stops offering that ID
+to that series, for good. So one refresh of the channel fails, and the next
+one, without the ID, goes through. The plugin's own line in Silo's log names
+the series and the ID:
+
+```
+youtube: Silo did not keep the IMDb ID filled into a series' entry, so another title holds it or it was removed; it is not filled in again
+```
+
+The same holds for an IMDb ID you remove from an entry in Silo: the plugin
+does not put it back. An `{imdb-tt…}` tag in the folder's name is not held
+back in this way; it is offered on every scan.
 
 ## Setup
 
