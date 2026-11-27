@@ -73,8 +73,16 @@ var lookups = newLookupLog()
 
 // note records one lookup: kind is the call and what it was for
 // ("GetMetadata/episode"), shape what the request carried without the values
-// themselves, and fields the values.
-func (l *lookupLog) note(kind, outcome, shape string, fields ...any) {
+// themselves, and fields the values. A lookup that failed is counted and
+// sampled by the kind of failure too (the gRPC code Silo is answered with),
+// and its sample says why: Silo's own log has the failure, not what was
+// asked, and this one had the question without the reason.
+func (l *lookupLog) note(kind, outcome string, err error, shape string, fields ...any) {
+	if err != nil {
+		code := statusCode(err).String()
+		outcome += "(" + code + ")"
+		fields = append(fields, "error", err.Error(), "code", code)
+	}
 	l.mu.Lock()
 	l.tally[kind+":"+outcome]++
 	key := kind + ":" + outcome + " " + shape
@@ -92,8 +100,10 @@ func (l *lookupLog) note(kind, outcome, shape string, fields ...any) {
 		return
 	}
 	args := append([]any{"lookup", kind, "outcome", outcome, "shape", shape}, fields...)
-	switch outcome {
-	case found, notAnswered:
+	switch {
+	case err != nil:
+		logger.Warn("youtube: a lookup that failed, as Silo sent it", args...)
+	case outcome == found, outcome == notAnswered:
 		logger.Info("youtube: a lookup as Silo sent it", args...)
 	default:
 		logger.Warn("youtube: a lookup that found nothing, as Silo sent it", args...)

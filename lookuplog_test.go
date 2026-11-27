@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
 	"google.golang.org/protobuf/types/known/structpb"
+
+	"github.com/collisionc/silo-plugin-metadata-youtube/youtube"
 )
 
 // capturedLog holds the plug-in's log lines for a test, and the tally's
@@ -80,10 +83,10 @@ func TestLogLinesAreInTheFormSilosHostPassesOn(t *testing.T) {
 func TestLookupsAreSampledByShapeAndTallied(t *testing.T) {
 	captured := captureLog(t)
 	for range 5 {
-		lookups.note("GetMetadata/episode", noVideoID, "provider_id:channel ids:none file:none", "provider_id", "UCA94TZluH5eQtkQpaCZQfRw", "file_path", "")
+		lookups.note("GetMetadata/episode", noVideoID, nil, "provider_id:channel ids:none file:none", "provider_id", "UCA94TZluH5eQtkQpaCZQfRw", "file_path", "")
 	}
-	lookups.note("GetMetadata/episode", noVideoID, "provider_id:none ids:none file:names_no_video", "file_path", "/x/y.mkv")
-	lookups.note("GetEpisodes", found, "series:channel ids:channel season:set", "answers", 3)
+	lookups.note("GetMetadata/episode", noVideoID, nil, "provider_id:none ids:none file:names_no_video", "file_path", "/x/y.mkv")
+	lookups.note("GetEpisodes", found, nil, "series:channel ids:channel season:set", "answers", 3)
 
 	lines := captured.lines(t)
 	if len(lines) != 4 {
@@ -117,7 +120,7 @@ func TestLookupsAreSampledByShapeAndTallied(t *testing.T) {
 
 	// The next lookup starts a new spell and a new count; a shape already
 	// shown twice is not shown again.
-	lookups.note("GetMetadata/episode", noVideoID, "provider_id:channel ids:none file:none")
+	lookups.note("GetMetadata/episode", noVideoID, nil, "provider_id:channel ids:none file:none")
 	if len(captured.waits) != 2 {
 		t.Fatalf("tally timers after a new spell = %d, want 2", len(captured.waits))
 	}
@@ -189,5 +192,42 @@ func TestHandlersLogWhatSiloSent(t *testing.T) {
 	}
 	if lines[3]["answers"] != float64(1) || lines[3]["season_number"] != float64(2024) {
 		t.Errorf("the episode list = %v", lines[3])
+	}
+}
+
+// A lookup that fails says why, in its sample and in the tally, by the kind
+// of failure Silo is answered with.
+func TestFailedLookupsSayWhy(t *testing.T) {
+	log := captureLog(t)
+	quota := &youtube.APIError{Status: 403, Reason: "quotaExceeded", Message: "You have exceeded your quota."}
+	for range 3 {
+		lookups.note("GetEpisodes", outcomeOf(true, 0, quota), quota, "series:channel ids:channel season:set", "season_number", 1)
+	}
+	down := fmt.Errorf("%w: dial tcp: no such host", youtube.ErrRequestFailed)
+	lookups.note("GetEpisodes", outcomeOf(true, 0, down), down, "series:channel ids:channel season:set", "season_number", 1)
+	log.tally()
+
+	var samples, tallies []map[string]any
+	for _, line := range log.lines(t) {
+		switch line["@message"] {
+		case "youtube: a lookup that failed, as Silo sent it":
+			samples = append(samples, line)
+		case "youtube: what Silo asked in 5 minutes":
+			tallies = append(tallies, line)
+		}
+	}
+	// Two of the three quota failures, and the outage: a kind of its own.
+	if len(samples) != 3 {
+		t.Fatalf("%d samples, want 3: %v", len(samples), samples)
+	}
+	if got := samples[0]; got["@level"] != "warn" || got["code"] != "ResourceExhausted" || got["outcome"] != "error(ResourceExhausted)" ||
+		!strings.Contains(got["error"].(string), "exceeded your quota") {
+		t.Errorf("the quota sample = %v", got)
+	}
+	if got := samples[2]; got["code"] != "Unavailable" || !strings.Contains(got["error"].(string), "no such host") {
+		t.Errorf("the outage sample = %v", got)
+	}
+	if len(tallies) != 1 || tallies[0]["by_kind_and_outcome"] != "GetEpisodes:error(ResourceExhausted)=3 GetEpisodes:error(Unavailable)=1" {
+		t.Errorf("tallies = %v", tallies)
 	}
 }

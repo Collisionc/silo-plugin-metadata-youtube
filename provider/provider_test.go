@@ -703,6 +703,7 @@ func TestSlowListingFinishesInTheBackground(t *testing.T) {
 func TestSlowVideoDetailsLeaveTheListingsTitles(t *testing.T) {
 	p, fake := newTestProvider(t)
 	p.work.margin = 0
+	warned := warnings(p)
 	if _, err := p.Seasons(context.Background(), channelID); err != nil {
 		t.Fatal(err)
 	}
@@ -711,6 +712,10 @@ func TestSlowVideoDetailsLeaveTheListingsTitles(t *testing.T) {
 	episodes, err := p.Episodes(shortCall(t), channelID, 2024)
 	if err != nil || len(episodes) != 2 {
 		t.Fatalf("episodes = %+v, err = %v", episodes, err)
+	}
+	// The answer is a success to Silo; the warning says what it lacks.
+	if len(*warned) != 1 || !strings.Contains((*warned)[0], "went back without") {
+		t.Errorf("warnings = %q, want one that episodes went back without their details", *warned)
 	}
 	if episodes[0].Title != "Mario's Winter Run" || episodes[0].AirDate != "2024-01-02" || episodes[0].RuntimeMinutes != 0 {
 		t.Errorf("episode before its details = %+v, want the listing's title and date", episodes[0])
@@ -722,6 +727,9 @@ func TestSlowVideoDetailsLeaveTheListingsTitles(t *testing.T) {
 	}
 	if got := fake.count("videos"); got != 1 {
 		t.Errorf("videos calls = %d, want 1: the details fetched once", got)
+	}
+	if len(*warned) != 1 {
+		t.Errorf("warnings = %q, want none for the complete answer", *warned)
 	}
 }
 
@@ -811,5 +819,45 @@ func TestUploadsAreListedFromAYear(t *testing.T) {
 	}
 	if ids, _ := list(own, playlistID); !slices.Equal(ids, []string{"newestvid01"}) {
 		t.Errorf("the playlist from 2025: %v", ids)
+	}
+}
+
+// warnings collects what a provider warns of.
+func warnings(p *Provider) *[]string {
+	var mu sync.Mutex
+	got := &[]string{}
+	p.warn = func(msg string, keyvals ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		*got = append(*got, msg+" "+fmt.Sprint(keyvals...))
+	}
+	return got
+}
+
+// A playlist longer than the listing's limit is listed as far as the limit,
+// and says so: the files of the videos past it link to no episode, and
+// nothing else would show why.
+func TestListingCutShortIsWarnedOf(t *testing.T) {
+	p, fake := newTestProvider(t)
+	got := warnings(p)
+	p.maxPages = 1
+	series, err := p.SeriesByID(context.Background(), channelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listing, err := p.Listing(context.Background(), series)
+	if err != nil || len(listing) != 2 || fake.count("playlistItems") != 1 {
+		t.Fatalf("listing = %d uploads in %d calls, err = %v; want the first page's 2", len(listing), fake.count("playlistItems"), err)
+	}
+	if len(*got) != 1 || !strings.Contains((*got)[0], "cut short") || !strings.Contains((*got)[0], uploadsID) {
+		t.Errorf("warnings = %q, want one that the listing was cut short", *got)
+	}
+
+	// A listing stopped at the year it is listed from is whole, not cut.
+	p, _ = newTestProvider(t)
+	got = warnings(p)
+	p.from = UploadsFrom{Year: 2026}
+	if _, err := p.Listing(context.Background(), series); err != nil || len(*got) != 0 {
+		t.Errorf("listed from 2026: err = %v, warnings = %q; want none", err, *got)
 	}
 }

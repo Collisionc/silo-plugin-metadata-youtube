@@ -339,8 +339,18 @@ other form is shown at debug level only, which Silo's log does not keep.
   while the plugin runs, with their values. Silo itself says only
   `no metadata found from any provider` when a refresh fails; this shows what
   the refresh sent.
+- `youtube: a lookup that failed, as Silo sent it`, a warning: the same for a
+  lookup that ended in an error, with the `error` and the gRPC `code` Silo was
+  answered with. The first two of each kind of failure are logged.
 - `youtube: what Silo asked in 5 minutes`: the lookups of a busy spell,
-  counted by call and outcome.
+  counted by call and outcome, a failure by its kind
+  (`GetEpisodes:error(ResourceExhausted)=3` is three refused for quota).
+- `youtube: episodes went back without their descriptions, runtimes and
+  thumbnails`, a warning: Silo's 30 seconds ran out while a large channel's
+  video details were being fetched. The episodes went back with titles and
+  dates, which links the files; a later refresh has the rest.
+- `youtube: a listing was cut short`, a warning: a playlist has more than
+  25,000 videos. Those past the limit have no episode.
 
 ## Building from source
 

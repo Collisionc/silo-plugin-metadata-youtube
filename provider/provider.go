@@ -79,6 +79,13 @@ type Provider struct {
 	// from is the first year whose uploads are listed; the zero value lists
 	// them all.
 	from UploadsFrom
+
+	// warn reports what an answer does not show: a listing cut short,
+	// episodes sent without their details. It takes a message and key-value
+	// pairs, as a logger's Warn does.
+	warn func(msg string, keyvals ...any)
+	// maxPages is the most pages of one listing that are fetched.
+	maxPages int
 }
 
 type cached[T any] struct {
@@ -158,6 +165,16 @@ func (u UploadsFrom) firstYear(series *Series) int {
 // WithUploadsFrom lists uploads from a year on.
 func WithUploadsFrom(from UploadsFrom) Option { return func(p *Provider) { p.from = from } }
 
+// WithWarnings sends the provider's warnings to warn: a message and
+// key-value pairs. Without it they are dropped.
+func WithWarnings(warn func(msg string, keyvals ...any)) Option {
+	return func(p *Provider) {
+		if warn != nil {
+			p.warn = warn
+		}
+	}
+}
+
 // WithBackdrop sets the series background art.
 func WithBackdrop(backdrop Backdrop) Option { return func(p *Provider) { p.backdrop = backdrop } }
 
@@ -173,6 +190,8 @@ func New(client *youtube.Client, loc *time.Location, options ...Option) *Provide
 		mode:     SeasonsByYear,
 		backdrop: NoBackdrop,
 		now:      time.Now,
+		warn:     func(string, ...any) {},
+		maxPages: youtube.MaxPlaylistPages,
 		work:     newBackground(),
 		series:   make(map[string]cached[*Series]),
 		listings: make(map[string]cached[listing]),
@@ -738,16 +757,21 @@ func (p *Provider) fetchListing(ctx context.Context, series *Series) ([]Numbered
 	}
 	items := first.Items
 	next := first.Next
-	for page := 1; next != "" && page < youtube.MaxPlaylistPages && !enough(first); page++ {
+	stopped := enough(first)
+	for page := 1; next != "" && page < p.maxPages && !stopped; page++ {
 		more, err := p.yt.PlaylistPage(ctx, series.PlaylistID, next)
 		if err != nil {
 			return nil, err
 		}
 		items = append(items, more.Items...)
 		next = more.Next
-		if enough(more) {
-			break
-		}
+		stopped = enough(more)
+	}
+	if next != "" && !stopped {
+		// Nothing else shows it: the files of the videos left out simply
+		// link to no episode.
+		p.warn("youtube: a listing was cut short: the playlist has more videos than are listed, and those past the limit have no episode",
+			"series", series.ID, "playlist", series.PlaylistID, "listed", len(items), "playlist_size", first.Total)
 	}
 	uploads := make([]Upload, 0, len(items))
 	for _, item := range items {
@@ -934,9 +958,20 @@ func (p *Provider) Episodes(ctx context.Context, id string, season int) ([]Episo
 	for i, upload := range selected {
 		ids[i] = upload.VideoID
 	}
-	details, err := p.episodeDetails(ctx, fmt.Sprintf("videos:%s/%d", series.ID, season), ids)
+	details, complete, err := p.episodeDetails(ctx, fmt.Sprintf("videos:%s/%d", series.ID, season), ids)
 	if err != nil {
 		return nil, err
+	}
+	if !complete {
+		without := 0
+		for _, id := range ids {
+			if _, ok := details[id]; !ok {
+				without++
+			}
+		}
+		// Silo's log shows a successful answer; this says what it lacked.
+		p.warn("youtube: episodes went back without their descriptions, runtimes and thumbnails, which were still being fetched when Silo's time ran out; a later refresh has them",
+			"series", series.ID, "season", season, "episodes", len(ids), "without_details", without)
 	}
 	episodes := make([]Episode, 0, len(selected))
 	for _, upload := range selected {
@@ -1002,25 +1037,25 @@ func (p *Provider) videoDetails(ctx context.Context, ids []string) (map[string]y
 // thousands of videos: more calls than fit in the time Silo waits. The
 // fetch runs in the background under key. When the time runs out first, the
 // episodes go back with the details fetched so far, and the listing's title
-// and date for the rest, which is enough to link the files; the rest of the
-// details are cached for the next refresh.
-func (p *Provider) episodeDetails(ctx context.Context, key string, ids []string) (map[string]youtube.Video, error) {
+// and date for the rest, which is enough to link the files; complete is then
+// false, and the rest of the details are cached for the next refresh.
+func (p *Provider) episodeDetails(ctx context.Context, key string, ids []string) (details map[string]youtube.Video, complete bool, err error) {
 	out, missing := p.cachedVideos(ids)
 	if len(missing) == 0 {
-		return out, nil
+		return out, true, nil
 	}
 	fetched, err := p.work.do(ctx, key, func(ctx context.Context) (any, error) {
 		return p.fetchVideos(ctx, missing)
 	})
 	if errors.Is(err, ErrStillWorking) {
 		out, _ = p.cachedVideos(ids)
-		return out, nil
+		return out, false, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	maps.Copy(out, fetched.(map[string]youtube.Video))
-	return out, nil
+	return out, true, nil
 }
 
 // cachedVideos splits ids into the videos cached and the IDs that are not.

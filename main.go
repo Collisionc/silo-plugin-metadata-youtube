@@ -97,6 +97,7 @@ func (s *runtimeServer) configure(_ context.Context, entries []*pluginv1.ConfigE
 		provider.WithSeasonMode(provider.ParseSeasonMode(config.seasons)),
 		provider.WithBackdrop(provider.ParseBackdrop(config.backdrop)),
 		provider.WithUploadsFrom(from),
+		provider.WithWarnings(func(msg string, keyvals ...any) { logger.Warn(msg, keyvals...) }),
 	}
 	p := provider.New(youtube.NewClient(youtubeBaseURL, config.apiKey, nil), loc, options...)
 	s.mu.Lock()
@@ -171,7 +172,7 @@ func (s *metadataServer) Search(ctx context.Context, req *pluginv1.SearchMetadat
 		if strings.TrimSpace(req.GetQuery()) == "" {
 			query = "query:none"
 		}
-		lookups.note("Search/"+req.GetItemType(), outcome, query+" ids:"+idShape(ownID(req.GetProviderIds())),
+		lookups.note("Search/"+req.GetItemType(), outcome, err, query+" ids:"+idShape(ownID(req.GetProviderIds())),
 			"query", req.GetQuery(), "year", req.GetYear(), "provider_ids", idsText(req.GetProviderIds()), "answers", len(response.GetResults()))
 		err = statusError(err)
 	}()
@@ -236,7 +237,7 @@ func (s *metadataServer) GetMetadata(ctx context.Context, req *pluginv1.GetMetad
 		case id == "" && itemType != "series":
 			outcome = noVideoID
 		}
-		lookups.note("GetMetadata/"+itemType, outcome,
+		lookups.note("GetMetadata/"+itemType, outcome, err,
 			"provider_id:"+idShape(req.GetProviderId())+" ids:"+idShape(ownID(req.GetProviderIds()))+" file:"+pathShape(req.GetFilePath()),
 			"provider_id", req.GetProviderId(), "provider_ids", idsText(req.GetProviderIds()), "file_path", req.GetFilePath(), "language", req.GetLanguage())
 		err = statusError(err)
@@ -396,7 +397,7 @@ func (s *metadataServer) GetPersonDetail(context.Context, *pluginv1.GetPersonDet
 func (s *metadataServer) GetSeasons(ctx context.Context, req *pluginv1.GetSeasonsRequest) (response *pluginv1.GetSeasonsResponse, err error) {
 	id := providerID(req.GetProviderIds(), req.GetSeriesProviderId())
 	defer func() {
-		lookups.note("GetSeasons", outcomeOf(id != "", len(response.GetSeasons()), err),
+		lookups.note("GetSeasons", outcomeOf(id != "", len(response.GetSeasons()), err), err,
 			"series:"+idShape(req.GetSeriesProviderId())+" ids:"+idShape(ownID(req.GetProviderIds())),
 			"series_provider_id", req.GetSeriesProviderId(), "provider_ids", idsText(req.GetProviderIds()), "answers", len(response.GetSeasons()))
 		err = statusError(err)
@@ -443,7 +444,7 @@ func (s *metadataServer) GetEpisodes(ctx context.Context, req *pluginv1.GetEpiso
 		if req.GetSeasonNumber() == 0 {
 			season = "season:zero"
 		}
-		lookups.note("GetEpisodes", outcomeOf(id != "", len(response.GetEpisodes()), err),
+		lookups.note("GetEpisodes", outcomeOf(id != "", len(response.GetEpisodes()), err), err,
 			"series:"+idShape(req.GetSeriesProviderId())+" ids:"+idShape(ownID(req.GetProviderIds()))+" "+season,
 			"series_provider_id", req.GetSeriesProviderId(), "provider_ids", idsText(req.GetProviderIds()),
 			"season_number", req.GetSeasonNumber(), "answers", len(response.GetEpisodes()))
@@ -498,7 +499,7 @@ func (s *metadataServer) GetImages(ctx context.Context, req *pluginv1.GetImagesR
 		case req.GetItemType() != "series" && req.GetItemType() != "episode" && req.GetItemType() != "movie":
 			outcome = notAnswered
 		}
-		lookups.note("GetImages/"+req.GetItemType(), outcome,
+		lookups.note("GetImages/"+req.GetItemType(), outcome, err,
 			"provider_id:"+idShape(req.GetProviderId())+" ids:"+idShape(ownID(req.GetProviderIds()))+" "+season,
 			"provider_id", req.GetProviderId(), "provider_ids", idsText(req.GetProviderIds()), "answers", len(response.GetImages()))
 		err = statusError(err)
