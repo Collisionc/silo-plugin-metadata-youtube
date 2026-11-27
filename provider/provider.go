@@ -7,7 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -46,6 +48,9 @@ const (
 	maxCachedSearches = 1000
 )
 
+// videoBatch is how many videos one videos.list call looks up.
+const videoBatch = 50
+
 // Provider answers Silo's metadata calls from the YouTube Data API, with an
 // in-memory cache so one library refresh does not list a channel once per
 // season.
@@ -55,6 +60,7 @@ type Provider struct {
 	mode     SeasonMode
 	backdrop Backdrop
 	now      func() time.Time
+	work     *background
 
 	mu       sync.Mutex
 	series   map[string]cached[*Series]
@@ -130,6 +136,7 @@ func New(client *youtube.Client, loc *time.Location, options ...Option) *Provide
 		mode:     SeasonsByYear,
 		backdrop: NoBackdrop,
 		now:      time.Now,
+		work:     newBackground(),
 		series:   make(map[string]cached[*Series]),
 		listings: make(map[string]cached[[]NumberedUpload]),
 		videos:   make(map[string]cached[youtube.Video]),
@@ -526,6 +533,11 @@ func (p *Provider) storeSeries(series *Series) {
 }
 
 // Listing returns a series' videos, numbered by Number.
+//
+// A channel of thousands of videos takes longer to list (one call per 50)
+// than Silo waits for an answer, so the listing runs in the background: when
+// ctx's deadline comes first, Listing returns ErrStillWorking, the listing
+// goes on, and Silo's next call finds it cached.
 func (p *Provider) Listing(ctx context.Context, series *Series) ([]NumberedUpload, error) {
 	p.mu.Lock()
 	entry, ok := p.listings[series.ID]
@@ -536,6 +548,20 @@ func (p *Provider) Listing(ctx context.Context, series *Series) ([]NumberedUploa
 	if series.PlaylistID == "" {
 		return nil, fmt.Errorf("youtube: %s has no playlist to list", series.ID)
 	}
+	listing, err := p.work.do(ctx, "listing:"+series.ID, func(ctx context.Context) (any, error) {
+		return p.fetchListing(ctx, series)
+	})
+	if errors.Is(err, ErrStillWorking) {
+		return nil, fmt.Errorf("%w (listing the videos of %s)", ErrStillWorking, series.ID)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return listing.([]NumberedUpload), nil
+}
+
+// fetchListing lists a series' videos, numbers them and caches the result.
+func (p *Provider) fetchListing(ctx context.Context, series *Series) ([]NumberedUpload, error) {
 	items, err := p.yt.PlaylistItems(ctx, series.PlaylistID)
 	if err != nil {
 		var apiErr *youtube.APIError
@@ -710,7 +736,7 @@ func (p *Provider) Episodes(ctx context.Context, id string, season int) ([]Episo
 	for i, upload := range selected {
 		ids[i] = upload.VideoID
 	}
-	details, err := p.videoDetails(ctx, ids)
+	details, err := p.episodeDetails(ctx, fmt.Sprintf("videos:%s/%d", series.ID, season), ids)
 	if err != nil {
 		return nil, err
 	}
@@ -762,10 +788,50 @@ func (p *Provider) Video(ctx context.Context, id string) (youtube.Video, bool, e
 
 // videoDetails fetches the videos not cached yet, 50 per call.
 func (p *Provider) videoDetails(ctx context.Context, ids []string) (map[string]youtube.Video, error) {
+	out, missing := p.cachedVideos(ids)
+	if len(missing) == 0 {
+		return out, nil
+	}
+	fetched, err := p.fetchVideos(ctx, missing)
+	if err != nil {
+		return nil, err
+	}
+	maps.Copy(out, fetched)
+	return out, nil
+}
+
+// episodeDetails is videoDetails for a season's episodes, which can be
+// thousands of videos: more calls than fit in the time Silo waits. The
+// fetch runs in the background under key. When the time runs out first, the
+// episodes go back with the details fetched so far, and the listing's title
+// and date for the rest, which is enough to link the files; the rest of the
+// details are cached for the next refresh.
+func (p *Provider) episodeDetails(ctx context.Context, key string, ids []string) (map[string]youtube.Video, error) {
+	out, missing := p.cachedVideos(ids)
+	if len(missing) == 0 {
+		return out, nil
+	}
+	fetched, err := p.work.do(ctx, key, func(ctx context.Context) (any, error) {
+		return p.fetchVideos(ctx, missing)
+	})
+	if errors.Is(err, ErrStillWorking) {
+		out, _ = p.cachedVideos(ids)
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	maps.Copy(out, fetched.(map[string]youtube.Video))
+	return out, nil
+}
+
+// cachedVideos splits ids into the videos cached and the IDs that are not.
+func (p *Provider) cachedVideos(ids []string) (map[string]youtube.Video, []string) {
 	out := make(map[string]youtube.Video, len(ids))
 	var missing []string
 	now := p.now()
 	p.mu.Lock()
+	defer p.mu.Unlock()
 	for _, id := range ids {
 		if entry, ok := p.videos[id]; ok && !now.After(entry.expires) {
 			out[id] = entry.value
@@ -773,19 +839,25 @@ func (p *Provider) videoDetails(ctx context.Context, ids []string) (map[string]y
 			missing = append(missing, id)
 		}
 	}
-	p.mu.Unlock()
-	if len(missing) == 0 {
-		return out, nil
+	return out, missing
+}
+
+// fetchVideos looks the videos up 50 per call, caching each call's answer as
+// it comes, so a fetch cut short keeps what it got.
+func (p *Provider) fetchVideos(ctx context.Context, ids []string) (map[string]youtube.Video, error) {
+	out := make(map[string]youtube.Video, len(ids))
+	for batch := range slices.Chunk(ids, videoBatch) {
+		videos, err := p.yt.Videos(ctx, batch)
+		if err != nil {
+			return out, err
+		}
+		now := p.now()
+		p.mu.Lock()
+		for _, video := range videos {
+			out[video.ID] = video
+			put(p.videos, video.ID, video, now, now.Add(detailTTL), maxCachedVideos)
+		}
+		p.mu.Unlock()
 	}
-	videos, err := p.yt.Videos(ctx, missing)
-	if err != nil {
-		return nil, err
-	}
-	p.mu.Lock()
-	for _, video := range videos {
-		out[video.ID] = video
-		put(p.videos, video.ID, video, now, now.Add(detailTTL), maxCachedVideos)
-	}
-	p.mu.Unlock()
 	return out, nil
 }

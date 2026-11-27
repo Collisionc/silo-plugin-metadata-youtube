@@ -60,11 +60,18 @@ func (c *Client) HasKey() bool { return c != nil && c.apiKey != "" }
 // ErrNoAPIKey is returned by every call when no API key is configured.
 var ErrNoAPIKey = errors.New("youtube: no API key configured (Admin > Plugins > YouTube Metadata)")
 
+// ErrRequestFailed marks a call that got no answer from the API: the
+// connection failed or broke off. Trying again later can help.
+var ErrRequestFailed = errors.New("youtube: request failed")
+
 // APIError is a non-2xx answer from the API.
 type APIError struct {
 	Status  int
 	Reason  string
 	Message string
+	// Detail is the google.rpc.ErrorInfo reason Google adds to some errors,
+	// such as API_KEY_INVALID or SERVICE_DISABLED.
+	Detail string
 }
 
 func (e *APIError) Error() string {
@@ -84,11 +91,34 @@ func (e *APIError) QuotaExceeded() bool {
 	return false
 }
 
+// RateLimited reports whether the API asked for fewer calls per second (not
+// the daily quota, which QuotaExceeded reports).
+func (e *APIError) RateLimited() bool {
+	return e.Status == http.StatusTooManyRequests || e.Reason == "rateLimitExceeded" || e.Reason == "userRateLimitExceeded"
+}
+
+// KeyRejected reports whether the API refused the key itself: it is not a
+// valid key, has expired, is restricted to other callers, or belongs to a
+// project where the YouTube Data API is not enabled. Only a new key or a
+// change in the Google Cloud console helps.
+func (e *APIError) KeyRejected() bool {
+	if e.Status != http.StatusBadRequest && e.Status != http.StatusUnauthorized && e.Status != http.StatusForbidden {
+		return false
+	}
+	switch {
+	case strings.HasPrefix(e.Detail, "API_KEY_"), e.Detail == "SERVICE_DISABLED":
+		return true
+	case e.Reason == "keyInvalid", e.Reason == "keyExpired", e.Reason == "accessNotConfigured", e.Reason == "ipRefererBlocked":
+		return true
+	}
+	return strings.Contains(strings.ToLower(e.Message), "api key")
+}
+
 func (e *APIError) retryable() bool {
 	if e.QuotaExceeded() {
 		return false
 	}
-	return e.Status == http.StatusTooManyRequests || e.Status >= 500 || e.Reason == "rateLimitExceeded" || e.Reason == "userRateLimitExceeded"
+	return e.RateLimited() || e.Status >= 500
 }
 
 type errorBody struct {
@@ -98,6 +128,10 @@ type errorBody struct {
 		Errors  []struct {
 			Reason string `json:"reason"`
 		} `json:"errors"`
+		Details []struct {
+			Type   string `json:"@type"`
+			Reason string `json:"reason"`
+		} `json:"details"`
 	} `json:"error"`
 }
 
@@ -152,14 +186,14 @@ func (c *Client) do(ctx context.Context, endpoint string, dest any) error {
 		// The URL carries the key; never put it in an error or a log.
 		var urlErr *url.Error
 		if errors.As(err, &urlErr) {
-			return fmt.Errorf("youtube: request failed: %w", urlErr.Err)
+			return fmt.Errorf("%w: %w", ErrRequestFailed, urlErr.Err)
 		}
-		return fmt.Errorf("youtube: request failed")
+		return ErrRequestFailed
 	}
 	defer resp.Body.Close()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
 	if err != nil {
-		return fmt.Errorf("youtube: reading response: %w", err)
+		return fmt.Errorf("%w: reading response: %w", ErrRequestFailed, err)
 	}
 	if len(body) > maxResponseBody {
 		return fmt.Errorf("youtube: response larger than %d bytes", maxResponseBody)
@@ -171,6 +205,11 @@ func (c *Client) do(ctx context.Context, endpoint string, dest any) error {
 			apiErr.Message = parsed.Error.Message
 			if len(parsed.Error.Errors) > 0 {
 				apiErr.Reason = parsed.Error.Errors[0].Reason
+			}
+			for _, detail := range parsed.Error.Details {
+				if strings.HasSuffix(detail.Type, "google.rpc.ErrorInfo") {
+					apiErr.Detail = detail.Reason
+				}
 			}
 		}
 		return apiErr
@@ -273,6 +312,16 @@ func (c *Client) ChannelByHandle(ctx context.Context, handle string) (*Channel, 
 		return nil, nil
 	}
 	return &out.Items[0], nil
+}
+
+// checkKeyChannel is YouTube's own channel, a lookup that always works.
+const checkKeyChannel = "UCBR8-60-B28hp2BmDPdntcQ"
+
+// CheckKey makes the cheapest call there is, 1 quota unit, to find out
+// whether the API accepts the key.
+func (c *Client) CheckKey(ctx context.Context) error {
+	var out channelList
+	return c.get(ctx, "channels", url.Values{"part": {"id"}, "id": {checkKeyChannel}}, &out)
 }
 
 // SearchChannels returns the IDs of the channels best matching query, best

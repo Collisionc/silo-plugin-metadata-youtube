@@ -5,7 +5,7 @@ go 1.26.0
 toolchain go1.26.11
 
 require (
-	github.com/Silo-Server/silo-plugin-sdk v0.31.0
+	github.com/Silo-Server/silo-plugin-sdk v0.35.0
 	github.com/hashicorp/go-hclog v1.6.3
 	google.golang.org/protobuf v1.36.11
 )
@@ -18,6 +18,7 @@ require (
 	github.com/mattn/go-colorable v0.1.12 // indirect
 	github.com/mattn/go-isatty v0.0.17 // indirect
 	github.com/oklog/run v1.1.0 // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
 	golang.org/x/net v0.63.0 // indirect
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.44.0 // indirect

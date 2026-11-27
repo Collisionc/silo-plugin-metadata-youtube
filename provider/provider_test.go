@@ -33,6 +33,20 @@ type fakeYouTube struct {
 	quota bool
 	// noSearchHits makes a channel search find nothing.
 	noSearchHits bool
+	// gate, when set, holds playlistItems and videos calls until it closes.
+	gate chan struct{}
+}
+
+// holdListings makes playlistItems and videos calls wait until the returned
+// function is called (or the test ends).
+func (f *fakeYouTube) holdListings(t *testing.T) (release func()) {
+	gate := make(chan struct{})
+	f.mu.Lock()
+	f.gate = gate
+	f.mu.Unlock()
+	release = sync.OnceFunc(func() { close(gate) })
+	t.Cleanup(release)
+	return release
 }
 
 func (f *fakeYouTube) count(resource string) int {
@@ -46,7 +60,11 @@ func (f *fakeYouTube) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.calls[resource]++
 	quota := f.quota
+	gate := f.gate
 	f.mu.Unlock()
+	if gate != nil && (resource == "playlistItems" || resource == "videos") {
+		<-gate
+	}
 	if r.URL.Query().Get("key") != testKey {
 		http.Error(w, `{"error":{"code":400,"message":"API key not valid","errors":[{"reason":"badRequest"}]}}`, http.StatusBadRequest)
 		return
@@ -566,5 +584,62 @@ func TestBackdropChoices(t *testing.T) {
 	}
 	if ParseBackdrop("") != NoBackdrop || ParseBackdrop("banner") != BannerBackdrop || ParseBackdrop("video") != VideoBackdrop || ParseBackdrop("x") != NoBackdrop {
 		t.Error("ParseBackdrop")
+	}
+}
+
+// shortCall is a context that gives up the way Silo's 30-second call
+// deadline does, but at once.
+func shortCall(t *testing.T) context.Context {
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	t.Cleanup(cancel)
+	return ctx
+}
+
+// A channel too large to list within Silo's deadline is listed in the
+// background: the call that ran out of time says so, the listing goes on, and
+// the next call gets it without listing the channel again.
+func TestSlowListingFinishesInTheBackground(t *testing.T) {
+	p, fake := newTestProvider(t)
+	p.work.margin = 0
+	release := fake.holdListings(t)
+
+	if _, err := p.Seasons(shortCall(t), channelID); !errors.Is(err, ErrStillWorking) {
+		t.Fatalf("err = %v, want ErrStillWorking", err)
+	}
+	release()
+	seasons, err := p.Seasons(context.Background(), channelID)
+	if err != nil || len(seasons) != 3 {
+		t.Fatalf("seasons = %+v, err = %v", seasons, err)
+	}
+	if got := fake.count("playlistItems"); got != 2 {
+		t.Errorf("playlistItems calls = %d, want 2: the two pages, listed once", got)
+	}
+}
+
+// Thousands of videos' details take longer than Silo waits too. The episodes
+// then come back with the listing's titles and dates, enough to link the
+// files, and the details fetched meanwhile fill in the next answer.
+func TestSlowVideoDetailsLeaveTheListingsTitles(t *testing.T) {
+	p, fake := newTestProvider(t)
+	p.work.margin = 0
+	if _, err := p.Seasons(context.Background(), channelID); err != nil {
+		t.Fatal(err)
+	}
+	release := fake.holdListings(t)
+
+	episodes, err := p.Episodes(shortCall(t), channelID, 2024)
+	if err != nil || len(episodes) != 2 {
+		t.Fatalf("episodes = %+v, err = %v", episodes, err)
+	}
+	if episodes[0].Title != "Mario's Winter Run" || episodes[0].AirDate != "2024-01-02" || episodes[0].RuntimeMinutes != 0 {
+		t.Errorf("episode before its details = %+v, want the listing's title and date", episodes[0])
+	}
+	release()
+	episodes, err = p.Episodes(context.Background(), channelID, 2024)
+	if err != nil || len(episodes) != 2 || episodes[0].Title != "Full title of 0bNNs5GTru0" || episodes[0].RuntimeMinutes != 6 {
+		t.Fatalf("episodes after the details = %+v, err = %v", episodes, err)
+	}
+	if got := fake.count("videos"); got != 1 {
+		t.Errorf("videos calls = %d, want 1: the details fetched once", got)
 	}
 }

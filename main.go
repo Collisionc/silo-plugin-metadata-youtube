@@ -5,12 +5,11 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
 	_ "embed"
-	"encoding/hex"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,7 +20,6 @@ import (
 	pluginv1 "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginproto/silo/plugin/v1"
 	publicmanifest "github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/manifest"
 	"github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/runtime"
-	"github.com/Silo-Server/silo-plugin-sdk/pkg/pluginsdk/runtimedefault"
 
 	"github.com/collisionc/silo-plugin-metadata-youtube/provider"
 	"github.com/collisionc/silo-plugin-metadata-youtube/youtube"
@@ -37,56 +35,96 @@ const configKey = "youtube"
 // youtubeBaseURL is replaced by tests.
 var youtubeBaseURL = youtube.DefaultBaseURL
 
+// runtimeServer holds the provider built from the plugin's settings.
 type runtimeServer struct {
-	runtimedefault.Server
-
-	manifest *pluginv1.PluginManifest
-
 	mu       sync.RWMutex
 	provider *provider.Provider
 }
 
-func (s *runtimeServer) GetManifest(context.Context, *pluginv1.GetManifestRequest) (*pluginv1.GetManifestResponse, error) {
-	return &pluginv1.GetManifestResponse{Manifest: s.manifest}, nil
+// settings are the values of the plugin's "youtube" config entry.
+type settings struct {
+	apiKey, timezone, seasons, backdrop string
 }
 
-// Configure reads the API key and time zone. An unknown time zone falls back
-// to UTC with a warning rather than failing the plugin.
-func (s *runtimeServer) Configure(_ context.Context, req *pluginv1.ConfigureRequest) (*pluginv1.ConfigureResponse, error) {
-	apiKey, zone, seasons, backdrop := "", "", "", ""
-	for _, entry := range req.GetConfig() {
+func readSettings(entries []*pluginv1.ConfigEntry) settings {
+	var out settings
+	for _, entry := range entries {
 		if entry.GetKey() != configKey || entry.GetValue() == nil {
 			continue
 		}
 		values := entry.GetValue().AsMap()
-		if v, ok := values["api_key"].(string); ok {
-			apiKey = strings.TrimSpace(v)
+		text := func(key string) string {
+			v, _ := values[key].(string)
+			return strings.TrimSpace(v)
 		}
-		if v, ok := values["timezone"].(string); ok {
-			zone = strings.TrimSpace(v)
-		}
-		if v, ok := values["seasons"].(string); ok {
-			seasons = strings.TrimSpace(v)
-		}
-		if v, ok := values["backdrop"].(string); ok {
-			backdrop = strings.TrimSpace(v)
-		}
+		out = settings{apiKey: text("api_key"), timezone: text("timezone"), seasons: text("seasons"), backdrop: text("backdrop")}
 	}
-	loc := time.UTC
-	if zone != "" {
-		if loaded, err := time.LoadLocation(zone); err == nil {
-			loc = loaded
-		} else {
-			logger.Warn("youtube: unknown time zone, using UTC", "timezone", zone, "error", err)
-		}
+	return out
+}
+
+// location is the configured time zone; UTC when it is unset.
+func (s settings) location() (*time.Location, error) {
+	if s.timezone == "" {
+		return time.UTC, nil
 	}
-	p := provider.New(youtube.NewClient(youtubeBaseURL, apiKey, nil), loc,
-		provider.WithSeasonMode(provider.ParseSeasonMode(seasons)),
-		provider.WithBackdrop(provider.ParseBackdrop(backdrop)))
+	return time.LoadLocation(s.timezone)
+}
+
+// configure builds the provider from the plugin's settings. An unknown time
+// zone falls back to UTC with a warning rather than failing the plugin.
+func (s *runtimeServer) configure(_ context.Context, entries []*pluginv1.ConfigEntry) error {
+	config := readSettings(entries)
+	loc, err := config.location()
+	if err != nil {
+		logger.Warn("youtube: unknown time zone, using UTC", "timezone", config.timezone, "error", err)
+		loc = time.UTC
+	}
+	p := provider.New(youtube.NewClient(youtubeBaseURL, config.apiKey, nil), loc,
+		provider.WithSeasonMode(provider.ParseSeasonMode(config.seasons)),
+		provider.WithBackdrop(provider.ParseBackdrop(config.backdrop)))
 	s.mu.Lock()
 	s.provider = p
 	s.mu.Unlock()
-	return &pluginv1.ConfigureResponse{}, nil
+	return nil
+}
+
+// configurationChecks answers Check Connection on the plugin's settings page.
+type configurationChecks struct {
+	pluginv1.UnimplementedConfigurationChecksServer
+}
+
+// checkTimeout keeps the check inside the 20 seconds Silo gives it.
+const checkTimeout = 15 * time.Second
+
+// TestConfiguration checks unsaved settings: the time zone, and the API key
+// with one call that costs 1 quota unit. A failed check says what to change.
+func (configurationChecks) TestConfiguration(ctx context.Context, req *pluginv1.TestConfigurationRequest) (*pluginv1.TestConfigurationResponse, error) {
+	config := readSettings(req.GetConfig())
+	failed := func(message string) (*pluginv1.TestConfigurationResponse, error) {
+		return &pluginv1.TestConfigurationResponse{Ok: false, Message: message}, nil
+	}
+	if config.apiKey == "" {
+		return failed("Enter a YouTube Data API v3 key.")
+	}
+	if _, err := config.location(); err != nil {
+		return failed(fmt.Sprintf("%q is not a time zone name. Use an IANA name such as America/New_York, or leave it empty for UTC.", config.timezone))
+	}
+	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
+	err := youtube.NewClient(youtubeBaseURL, config.apiKey, &http.Client{Timeout: checkTimeout}).CheckKey(ctx)
+	if err == nil {
+		return &pluginv1.TestConfigurationResponse{Ok: true}, nil
+	}
+	var apiErr *youtube.APIError
+	switch {
+	case errors.As(err, &apiErr) && apiErr.QuotaExceeded():
+		return failed("YouTube accepts the key, but its daily quota is used up. It resets at midnight Pacific time.")
+	case errors.As(err, &apiErr) && (apiErr.Detail == "SERVICE_DISABLED" || apiErr.Reason == "accessNotConfigured"):
+		return failed("The YouTube Data API v3 is not enabled for the key's Google Cloud project. Enable it under APIs & Services > Library. " + apiErr.Message)
+	case errors.As(err, &apiErr) && apiErr.KeyRejected():
+		return failed("YouTube rejected the API key: " + apiErr.Message)
+	}
+	return failed("Could not check the key with YouTube: " + err.Error())
 }
 
 func (s *runtimeServer) current() (*provider.Provider, error) {
@@ -115,6 +153,7 @@ func (s *metadataServer) Search(ctx context.Context, req *pluginv1.SearchMetadat
 		}
 		lookups.note("Search/"+req.GetItemType(), outcome, query+" ids:"+idShape(ownID(req.GetProviderIds())),
 			"query", req.GetQuery(), "year", req.GetYear(), "provider_ids", idsText(req.GetProviderIds()), "answers", len(response.GetResults()))
+		err = statusError(err)
 	}()
 	response = &pluginv1.SearchMetadataResponse{}
 	if req.GetItemType() != "series" {
@@ -175,6 +214,7 @@ func (s *metadataServer) GetMetadata(ctx context.Context, req *pluginv1.GetMetad
 		lookups.note("GetMetadata/"+itemType, outcome,
 			"provider_id:"+idShape(req.GetProviderId())+" ids:"+idShape(ownID(req.GetProviderIds()))+" file:"+pathShape(req.GetFilePath()),
 			"provider_id", req.GetProviderId(), "provider_ids", idsText(req.GetProviderIds()), "file_path", req.GetFilePath(), "language", req.GetLanguage())
+		err = statusError(err)
 	}()
 	if id == "" {
 		return &pluginv1.GetMetadataResponse{}, nil
@@ -270,8 +310,17 @@ func seriesItem(detail *provider.SeriesDetail) (*pluginv1.MetadataItem, error) {
 	if detail.Kind == youtube.RefPlaylist && detail.ChannelName != "" {
 		item.Studios = []string{detail.ChannelName}
 	}
+	// Episode numbers such as S2024E10201 only order the videos; Silo's
+	// clients show an episode's air date in their place for a series that
+	// asks for it, as Sportarr's leagues do.
+	item.Metadata = &structpb.Struct{Fields: map[string]*structpb.Value{
+		"episode_labels": structpb.NewStringValue(episodeLabelsAirDate),
+	}}
 	return item, nil
 }
+
+// episodeLabelsAirDate asks Silo to label a series' episodes by air date.
+const episodeLabelsAirDate = "air_date"
 
 func (s *metadataServer) GetPersonDetail(context.Context, *pluginv1.GetPersonDetailRequest) (*pluginv1.GetPersonDetailResponse, error) {
 	return &pluginv1.GetPersonDetailResponse{}, nil
@@ -283,6 +332,7 @@ func (s *metadataServer) GetSeasons(ctx context.Context, req *pluginv1.GetSeason
 		lookups.note("GetSeasons", outcomeOf(id != "", len(response.GetSeasons()), err),
 			"series:"+idShape(req.GetSeriesProviderId())+" ids:"+idShape(ownID(req.GetProviderIds())),
 			"series_provider_id", req.GetSeriesProviderId(), "provider_ids", idsText(req.GetProviderIds()), "answers", len(response.GetSeasons()))
+		err = statusError(err)
 	}()
 	response = &pluginv1.GetSeasonsResponse{}
 	if id == "" {
@@ -330,6 +380,7 @@ func (s *metadataServer) GetEpisodes(ctx context.Context, req *pluginv1.GetEpiso
 			"series:"+idShape(req.GetSeriesProviderId())+" ids:"+idShape(ownID(req.GetProviderIds()))+" "+season,
 			"series_provider_id", req.GetSeriesProviderId(), "provider_ids", idsText(req.GetProviderIds()),
 			"season_number", req.GetSeasonNumber(), "answers", len(response.GetEpisodes()))
+		err = statusError(err)
 	}()
 	response = &pluginv1.GetEpisodesResponse{}
 	if id == "" {
@@ -383,6 +434,7 @@ func (s *metadataServer) GetImages(ctx context.Context, req *pluginv1.GetImagesR
 		lookups.note("GetImages/"+req.GetItemType(), outcome,
 			"provider_id:"+idShape(req.GetProviderId())+" ids:"+idShape(ownID(req.GetProviderIds()))+" "+season,
 			"provider_id", req.GetProviderId(), "provider_ids", idsText(req.GetProviderIds()), "answers", len(response.GetImages()))
+		err = statusError(err)
 	}()
 	response = &pluginv1.GetImagesResponse{}
 	if id == "" || strings.Contains(id, "/") {
@@ -497,40 +549,28 @@ func dateOnly(rfc3339 string) string {
 	return t.UTC().Format(time.DateOnly)
 }
 
+// The SDK loads the embedded manifest, stamps the version and the binary's
+// checksum, answers the Runtime service (Configure through rs.configure) and
+// registers the settings check the manifest declares.
 func main() {
-	manifest, err := loadManifest()
-	if err != nil {
-		panic(err)
-	}
-	rs := &runtimeServer{manifest: manifest}
+	rs := &runtimeServer{}
 	// One line per start: it shows in Silo's log that this build runs and
 	// that the plug-in's lines reach that log.
-	logger.Info("youtube: started", "version", manifest.GetVersion())
-	runtime.Serve(runtime.ServeConfig{
-		Servers: runtime.CapabilityServers{
-			Runtime:          rs,
-			MetadataProvider: &metadataServer{runtime: rs},
-		},
-	})
+	logger.Info("youtube: started", "version", startedVersion())
+	runtime.ServeManifestWithOptions(manifestJSON, version,
+		runtime.CapabilityServers{MetadataProvider: &metadataServer{runtime: rs}},
+		runtime.WithConfigure(rs.configure),
+		runtime.WithConfigurationChecks(configurationChecks{}))
 }
 
-func loadManifest() (*pluginv1.PluginManifest, error) {
-	manifest, err := publicmanifest.Load(manifestJSON)
-	if err != nil {
-		return nil, fmt.Errorf("load embedded manifest: %w", err)
-	}
+// startedVersion is the version this build reports: the one stamped at build
+// time, else the manifest's.
+func startedVersion() string {
 	if version != "" {
-		manifest.Version = version
+		return version
 	}
-	executable, err := os.Executable()
-	if err != nil {
-		return nil, fmt.Errorf("resolve executable path: %w", err)
+	if m, err := publicmanifest.Load(manifestJSON); err == nil {
+		return m.GetVersion()
 	}
-	data, err := os.ReadFile(executable)
-	if err != nil {
-		return nil, fmt.Errorf("read executable %q: %w", executable, err)
-	}
-	sum := sha256.Sum256(data)
-	manifest.Checksum = hex.EncodeToString(sum[:])
-	return manifest, nil
+	return ""
 }

@@ -93,7 +93,7 @@ func configuredWith(t *testing.T, config map[string]any) *metadataServer {
 		t.Fatal(err)
 	}
 	rs := &runtimeServer{}
-	if _, err := rs.Configure(context.Background(), &pluginv1.ConfigureRequest{Config: []*pluginv1.ConfigEntry{{Key: configKey, Value: value}}}); err != nil {
+	if err := rs.configure(context.Background(), []*pluginv1.ConfigEntry{{Key: configKey, Value: value}}); err != nil {
 		t.Fatal(err)
 	}
 	return &metadataServer{runtime: rs}

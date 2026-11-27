@@ -64,7 +64,9 @@ passes plugins the folder name only.
 **The episodes.** Each year with uploads is a season. A video's episode number
 is `MMDDxx`: month, day, and its place among that day's uploads, from `01`.
 January 2nd's first upload is `S2024E10201`, its second `S2024E10202`. New
-uploads never renumber older episodes.
+uploads never renumber older episodes. The numbers only put the videos in
+order, so the plugin asks Silo's clients to label each episode with its
+upload date instead.
 
 With **Seasons** set to **One season**, every video is in season 1 and the
 year leads the number instead: `S1E2024010201`. Changing the setting
@@ -109,11 +111,15 @@ otherwise a video uploaded near midnight links to no episode.
    season per year or one season; **Backdrop** chooses the series background
    art: none (the default, as banners and thumbnails carry lettering that
    makes the description hard to read), the channel banner, or the newest
-   video's thumbnail.
-4. In the TV library holding the channels, enable **YouTube** in the metadata
-   provider chain. The plugin installs disabled, so other libraries are not
-   affected. Put it ahead of TVDB and TMDB, or leave it alone in that library,
-   so a channel is not matched to an unrelated TV show of the same name.
+   video's thumbnail. **Check Connection** tries the key with one call
+   (1 quota unit) and says what to fix if YouTube refuses it.
+4. Keep the channels in a TV library of their own, and in that library
+   enable **YouTube** as the only series metadata provider: turn TVDB and TMDB
+   off there. The plugin installs disabled, so other libraries are not
+   affected. Putting YouTube first in the chain is not enough: Silo's
+   automatic matching sets aside every candidate without a TVDB, TMDB or IMDb
+   ID as soon as any provider returns one, so a TV show that shares a
+   channel's name would win, or leave the channel unmatched.
 5. Scan the library.
 
 ## Quota
@@ -131,7 +137,18 @@ empty one too, so a folder scanned all day costs at most 2,400 units, not
 searches altogether.
 
 When the quota runs out, YouTube answers `quotaExceeded` until midnight
-Pacific time, and metadata calls fail until then.
+Pacific time, and metadata calls fail until then. The plugin tells Silo the
+failure is temporary, as it does when YouTube cannot be reached, so Silo
+keeps retrying an unmatched folder (waiting longer each time, up to a day)
+rather than giving up on it. A missing or rejected key is reported as a
+settings problem; changing the settings makes Silo try again.
+
+Silo waits 30 seconds for each answer, and listing a channel of several
+thousand videos takes longer. The listing then carries on in the background
+and Silo's next try finds it ready, without listing the channel again. An
+episode list that runs out of time comes back with each video's title and
+upload date, which is enough to link the files; descriptions, durations and
+thumbnails fetched meanwhile arrive with the next refresh.
 
 ## What it logs
 
@@ -226,7 +243,7 @@ YOUTUBE_API_KEY=... go test -run TestLive -v ./provider/
 ```
 
 The SDK, `github.com/Silo-Server/silo-plugin-sdk`, is pinned to the version
-the targeted Silo build uses (v0.31.0). Use a local `go.work` for SDK
+the targeted Silo build uses (v0.35.0). Use a local `go.work` for SDK
 development; never commit a filesystem `replace`.
 
 Pushing a `v*` tag builds the binaries and publishes a GitHub release.

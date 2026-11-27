@@ -3,11 +3,14 @@
   "version": "0.1.3",
   "checksum": "__CHECKSUM__",
   "silo_api_version": "v1",
+  "metadata": {
+    "configuration_check": true
+  },
   "presentation": {
     "display_name": "YouTube Metadata",
     "summary": "Show downloaded YouTube channels and playlists as TV series: one season per year, one episode per video.",
     "description_markdown": "Maps a YouTube channel (or playlist) to a series, each year with uploads to a season, and each video to an episode dated by its upload, so channels downloaded by TubeSync, yt-dlp or similar tools behave like TV shows in Silo. Titles, descriptions, durations and thumbnails come from the YouTube Data API. Episodes are numbered MMDDxx within the year, as ZeroQI's Absolute Series Scanner numbers YouTube channels for Plex. The provider is installed disabled so it only runs in the libraries where you enable it.",
-    "setup_markdown": "1. Create a YouTube Data API v3 key in the Google Cloud console and enter it under **YouTube** below.\n2. Name each channel's folder after the channel, or put its ID in the name: `Channel Name [youtube-UCxxxxxxxxxxxxxxxxxxxxxx]`. A playlist folder takes `[youtube-PLxxxx]`.\n3. Name each file with its upload date, as TubeSync's `{yyyy_mm_dd} - {title_full} [{key}].{ext}` does: Silo links a dated file to the episode uploaded that day.\n4. Enable **YouTube** in the metadata provider chain of the TV library holding the channels, ahead of TVDB and TMDB, or alone.",
+    "setup_markdown": "1. Create a YouTube Data API v3 key in the Google Cloud console and enter it under **YouTube** below.\n2. Name each channel's folder after the channel, or put its ID in the name: `Channel Name [youtube-UCxxxxxxxxxxxxxxxxxxxxxx]`. A playlist folder takes `[youtube-PLxxxx]`.\n3. Name each file with its upload date, as TubeSync's `{yyyy_mm_dd} - {title_full} [{key}].{ext}` does: Silo links a dated file to the episode uploaded that day.\n4. Keep the channels in a TV library of their own and enable **YouTube** there as the only series metadata provider, with TVDB and TMDB off: Silo prefers any candidate with a TVDB, TMDB or IMDb ID, so a TV show with a channel's name would win.",
     "homepage_url": "https://github.com/collisionc/silo-plugin-metadata-youtube",
     "source_url": "https://github.com/collisionc/silo-plugin-metadata-youtube",
     "support_url": "https://github.com/collisionc/silo-plugin-metadata-youtube/issues",
