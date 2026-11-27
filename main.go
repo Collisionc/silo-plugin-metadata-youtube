@@ -50,6 +50,8 @@ type settings struct {
 	apiKey, timezone, seasons, backdrop string
 	// how far back uploads are listed (uploadsfrom.go)
 	uploadsFromYear, uploadsFromByID string
+	// the most characters of an episode's overview; "" or "full" for all
+	episodeOverview string
 }
 
 func readSettings(entries []*pluginv1.ConfigEntry) settings {
@@ -71,9 +73,20 @@ func readSettings(entries []*pluginv1.ConfigEntry) settings {
 		out = settings{
 			apiKey: text("api_key"), timezone: text("timezone"), seasons: text("seasons"), backdrop: text("backdrop"),
 			uploadsFromYear: text("uploads_from"), uploadsFromByID: text("uploads_from_by_id"),
+			episodeOverview: text("episode_overview"),
 		}
 	}
 	return out
+}
+
+// overviewLimit is the configured length of an episode's overview in
+// characters; 0, for all of it, when unset, "full" or not a number.
+func (s settings) overviewLimit() int {
+	limit, err := strconv.Atoi(s.episodeOverview)
+	if err != nil || limit < 0 {
+		return 0
+	}
+	return limit
 }
 
 // location is the configured time zone; UTC when it is unset.
@@ -101,6 +114,7 @@ func (s *runtimeServer) configure(_ context.Context, entries []*pluginv1.ConfigE
 		provider.WithSeasonMode(provider.ParseSeasonMode(config.seasons)),
 		provider.WithBackdrop(provider.ParseBackdrop(config.backdrop)),
 		provider.WithUploadsFrom(from),
+		provider.WithEpisodeOverviewLimit(config.overviewLimit()),
 		provider.WithWarnings(func(msg string, keyvals ...any) { logger.Warn(msg, keyvals...) }),
 	}
 	p := provider.New(youtube.NewClient(youtubeBaseURL, config.apiKey, nil).CountInto(quota), loc, options...)
@@ -277,7 +291,7 @@ func (s *metadataServer) GetMetadata(ctx context.Context, req *pluginv1.GetMetad
 			ProviderId:  video.ID,
 			ItemType:    "episode",
 			Title:       video.Snippet.Title,
-			Overview:    strings.TrimSpace(video.Snippet.Description),
+			Overview:    p.EpisodeOverview(video.Snippet.Description),
 			Runtime:     int32(provider.RuntimeMinutes(video.ContentDetails.Duration)),
 			ProviderIds: ids,
 			PosterPath:  video.Snippet.Thumbnails.Best().URL,

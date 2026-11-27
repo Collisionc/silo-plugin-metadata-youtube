@@ -331,6 +331,33 @@ func TestIMDbIDSiloSendsWithASearch(t *testing.T) {
 	}
 }
 
+// "Episode descriptions" reaches the episodes Silo is sent, and what is not a
+// length keeps the whole description.
+func TestEpisodeDescriptionsSetting(t *testing.T) {
+	fakeAPI(t)
+	ids, _ := structpb.NewStruct(map[string]any{"youtube": "UCA94TZluH5eQtkQpaCZQfRw"})
+	overview := func(config map[string]any) string {
+		t.Helper()
+		resp, err := configuredWith(t, config).GetEpisodes(context.Background(), &pluginv1.GetEpisodesRequest{ProviderIds: ids, SeasonNumber: 2024})
+		if err != nil || len(resp.GetEpisodes()) != 1 {
+			t.Fatalf("episodes = %+v, err = %v", resp.GetEpisodes(), err)
+		}
+		return resp.GetEpisodes()[0].GetOverview()
+	}
+	for _, whole := range []any{nil, "full", "", "lots", "-5"} {
+		config := map[string]any{"api_key": "k"}
+		if whole != nil {
+			config["episode_overview"] = whole
+		}
+		if got := overview(config); got != "How to play" {
+			t.Errorf("%v: overview = %q, want the whole description", whole, got)
+		}
+	}
+	if got := overview(map[string]any{"api_key": "k", "episode_overview": "250"}); got != "How to play" {
+		t.Errorf("250: overview = %q, want the description, which is shorter", got)
+	}
+}
+
 func TestUnconfiguredPluginAsksForAKey(t *testing.T) {
 	s := &metadataServer{runtime: &runtimeServer{}}
 	_, err := s.Search(context.Background(), &pluginv1.SearchMetadataRequest{Query: "x", ItemType: "series"})

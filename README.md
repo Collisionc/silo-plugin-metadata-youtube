@@ -146,6 +146,15 @@ UC7XraaeLVbH_vrA39sO5pmA=all
 - **Check Connection** names an entry it cannot read. Saved anyway, such an
   entry is ignored, with a warning in Silo's log.
 
+**Episode descriptions** is how much of a video's description an episode
+carries: all of it, or its first 2,000, 1,000, 500 or 250 characters. A
+YouTube description runs to 5,000, much of it links and hashtags, and Silo
+is sent every episode of a season each time it scans the folder; with one
+season that is the whole channel, 15 MB for a channel of 6,000 videos with
+long descriptions. A shortened description ends at a paragraph, a line or a
+sentence where it can, and otherwise at a word, with an ellipsis. A movie
+keeps its whole description.
+
 ## Single videos as movies
 
 A channel folder suits a channel you follow: Silo lists every upload, the
@@ -272,6 +281,7 @@ the IMDb ID it has; a wrong one is changed in Silo.
    video's thumbnail. **List uploads from** leaves out the uploads from
    before the downloads you keep
    ([Listing only what you have](#listing-only-what-you-have)).
+   **Episode descriptions** shortens what each episode carries.
    **Check Connection** tries the key
    with one call (1 quota unit) and says what to fix if YouTube refuses it.
 4. Keep the channels in a TV library of their own, and in that library

@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/collisionc/silo-plugin-metadata-youtube/youtube"
 )
@@ -79,6 +80,10 @@ type Provider struct {
 	// from is the first year whose uploads are listed; the zero value lists
 	// them all.
 	from UploadsFrom
+
+	// overviewLimit is the most characters of a video's description an
+	// episode carries; 0 for all of it.
+	overviewLimit int
 
 	// warn reports what an answer does not show: a listing cut short,
 	// episodes sent without their details. It takes a message and key-value
@@ -164,6 +169,40 @@ func (u UploadsFrom) firstYear(series *Series) int {
 
 // WithUploadsFrom lists uploads from a year on.
 func WithUploadsFrom(from UploadsFrom) Option { return func(p *Provider) { p.from = from } }
+
+// WithEpisodeOverviewLimit cuts an episode's overview, the video's
+// description, to at most limit characters; 0 keeps all of it. Silo asks for
+// a season's episodes at every scan of the folder, and in one season that is
+// the whole channel: 6,000 descriptions of 2,400 characters are 15 MB an
+// answer, most of it the links and hashtags a description ends with.
+func WithEpisodeOverviewLimit(limit int) Option {
+	return func(p *Provider) { p.overviewLimit = max(limit, 0) }
+}
+
+// EpisodeOverview is a video's description as an episode's overview: trimmed,
+// and cut to the configured length.
+func (p *Provider) EpisodeOverview(description string) string {
+	return shorten(strings.TrimSpace(description), p.overviewLimit)
+}
+
+// shorten cuts text to at most limit characters (0 for no limit): at the end
+// of a paragraph, a line or a sentence, when that keeps at least a third of
+// what the limit allows, and otherwise at a word, with "…" to say so.
+func shorten(text string, limit int) string {
+	if limit <= 0 || utf8.RuneCountInString(text) <= limit {
+		return text
+	}
+	kept := string([]rune(text)[:limit])
+	for _, end := range []string{"\n\n", "\n", ". ", "! ", "? "} {
+		if i := strings.LastIndex(kept, end); i >= len(kept)/3 {
+			return strings.TrimRight(kept[:i+len(strings.TrimRight(end, " \n"))], " \t\r\n")
+		}
+	}
+	if i := strings.LastIndexAny(kept, " \t"); i >= len(kept)/2 {
+		kept = kept[:i]
+	}
+	return strings.TrimRight(kept, " \t\r\n,;:-") + "…"
+}
 
 // WithWarnings sends the provider's warnings to warn: a message and
 // key-value pairs. Without it they are dropped.
@@ -984,7 +1023,7 @@ func (p *Provider) Episodes(ctx context.Context, id string, season int) ([]Episo
 		}
 		if video, ok := details[upload.VideoID]; ok {
 			episode.Title = video.Snippet.Title
-			episode.Overview = strings.TrimSpace(video.Snippet.Description)
+			episode.Overview = p.EpisodeOverview(video.Snippet.Description)
 			episode.RuntimeMinutes = RuntimeMinutes(video.ContentDetails.Duration)
 			episode.StillURL = video.Snippet.Thumbnails.Best().URL
 		}

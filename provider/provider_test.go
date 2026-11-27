@@ -861,3 +861,45 @@ func TestListingCutShortIsWarnedOf(t *testing.T) {
 		t.Errorf("listed from 2026: err = %v, warnings = %q; want none", err, *got)
 	}
 }
+
+func TestShorten(t *testing.T) {
+	long := "Mario runs through the snow.\n\nSubscribe: https://example.com/subscribe\n#fitness #kids #running"
+	for name, c := range map[string]struct {
+		text  string
+		limit int
+		want  string
+	}{
+		"no limit":              {long, 0, long},
+		"short enough":          {"A short one.", 500, "A short one."},
+		"exactly the limit":     {"12345", 5, "12345"},
+		"at a paragraph":        {long, 60, "Mario runs through the snow."},
+		"at a line":             {"First line of it\nsecond line, which is rather longer than the first", 30, "First line of it"},
+		"at a sentence":         {"One sentence here. Another sentence that goes on and on and on.", 40, "One sentence here."},
+		"at a word":             {"words words words words words words words", 22, "words words words…"},
+		"one long word":         {"Supercalifragilisticexpialidocious", 10, "Supercalif…"},
+		"characters, not bytes": {"äöüäöüäöüäöü", 5, "äöüäö…"},
+		"a break too early":     {"Hi.\n\nThen a long paragraph without any stop in it at all to speak of", 40, "Hi.\n\nThen a long paragraph without any…"},
+	} {
+		if got := shorten(c.text, c.limit); got != c.want {
+			t.Errorf("%s: shorten(%d) = %q, want %q", name, c.limit, got, c.want)
+		}
+	}
+}
+
+// An episode carries as much of its video's description as the provider is
+// told to; a movie and a series keep all of theirs.
+func TestEpisodeOverviewLimit(t *testing.T) {
+	p, _ := newTestProvider(t)
+	p.overviewLimit = 9
+	episodes, err := p.Episodes(context.Background(), channelID, 2024)
+	if err != nil || len(episodes) != 2 {
+		t.Fatalf("episodes = %+v, err = %v", episodes, err)
+	}
+	if episodes[0].Overview != "About…" {
+		t.Errorf("overview = %q, want it cut at a word", episodes[0].Overview)
+	}
+	movie, err := p.Movie(context.Background(), "0bNNs5GTru0")
+	if err != nil || movie.Overview != "About 0bNNs5GTru0" {
+		t.Errorf("movie = %+v, err = %v; want the whole description", movie, err)
+	}
+}
