@@ -181,8 +181,8 @@ type SearchHit struct {
 // Search finds the series a library folder (or an administrator's search)
 // names. In order: a YouTube ID already stored for the item, a playlist or
 // channel ID or @handle in the text (a [youtube-UC...] folder tag, a pasted
-// URL), and finally a YouTube channel search for the text without its
-// bracketed tags.
+// URL), the channel of a video whose URL the text holds, and finally a
+// YouTube channel search for the text without its bracketed tags.
 func (p *Provider) Search(ctx context.Context, query string, providerIDs map[string]string) ([]SearchHit, error) {
 	if id := strings.TrimSpace(providerIDs[ProviderKey]); id != "" {
 		series, err := p.SeriesByID(ctx, id)
@@ -203,6 +203,19 @@ func (p *Provider) Search(ctx context.Context, query string, providerIDs map[str
 		default:
 			series, err = p.SeriesByID(ctx, ref.ID)
 		}
+		if err != nil || series == nil {
+			return nil, err
+		}
+		return series.namedHits(query), nil
+	}
+
+	// A video's URL, pasted into Silo's Match, names the channel it is on.
+	if id, ok := youtube.VideoIDFromURL(query); ok {
+		video, found, err := p.Video(ctx, id)
+		if err != nil || !found || !youtube.IsChannelID(video.Snippet.ChannelID) {
+			return nil, err
+		}
+		series, err := p.SeriesByID(ctx, video.Snippet.ChannelID)
 		if err != nil || series == nil {
 			return nil, err
 		}
@@ -318,14 +331,22 @@ func (s *Series) uploadsSeries() *Series {
 // without its bracketed tags, and Silo's title comparison accepts the match.
 func (s *Series) identified(query string) SearchHit {
 	hit := s.hit()
-	seen := map[string]bool{s.Title: true}
+	hit.Aliases = queryAliases(s.Title, query)
+	return hit
+}
+
+// queryAliases are the aliases of a hit the query named outright: the query
+// as it came and without its bracketed tags, unless they are the title.
+func queryAliases(title, query string) []string {
+	var aliases []string
+	seen := map[string]bool{title: true}
 	for _, alias := range []string{strings.TrimSpace(query), youtube.CleanQuery(query)} {
 		if alias != "" && !seen[alias] {
 			seen[alias] = true
-			hit.Aliases = append(hit.Aliases, alias)
+			aliases = append(aliases, alias)
 		}
 	}
-	return hit
+	return aliases
 }
 
 // compact lowercases s and keeps only its letters and digits.

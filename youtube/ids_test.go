@@ -18,6 +18,12 @@ func TestParseRef(t *testing.T) {
 		{"Show {youtube-UCm4JnxTxtvItQecKUc4zRhQ}", Ref{RefChannel, "UCm4JnxTxtvItQecKUc4zRhQ"}, true},
 		{"Playlist [youtube-PL22J3VaeABQD_IZs7y60I3lUrrFTzkpat]", Ref{RefPlaylist, "PL22J3VaeABQD_IZs7y60I3lUrrFTzkpat"}, true},
 		{"Mix [PLMBYlcH3smRxxcXT7G-HHAj5czGS0sZsB]", Ref{RefPlaylist, "PLMBYlcH3smRxxcXT7G-HHAj5czGS0sZsB"}, true},
+		// The shorter "yt-" prefix, in any brackets and any case.
+		{"Show {yt-UCm4JnxTxtvItQecKUc4zRhQ}", Ref{RefChannel, "UCm4JnxTxtvItQecKUc4zRhQ"}, true},
+		{"Show [YT-UCm4JnxTxtvItQecKUc4zRhQ]", Ref{RefChannel, "UCm4JnxTxtvItQecKUc4zRhQ"}, true},
+		{"Playlist {yt-PL22J3VaeABQD_IZs7y60I3lUrrFTzkpat}", Ref{RefPlaylist, "PL22J3VaeABQD_IZs7y60I3lUrrFTzkpat"}, true},
+		// "yt-" inside a longer ID-like word names nothing shorter.
+		{"Show {yt-UCm4JnxTxtvItQecKUc4zRhQx}", Ref{}, false},
 		// Pasted URLs and handles in a manual search.
 		{"https://www.youtube.com/channel/UCYzPXprvl5Y-Sf0g4vX-m6g", Ref{RefChannel, "UCYzPXprvl5Y-Sf0g4vX-m6g"}, true},
 		{"https://www.youtube.com/watch?v=f-wWBGo6a2w&list=PL22J3VaeABQD_IZs7y60I3lUrrFTzkpat", Ref{RefPlaylist, "PL22J3VaeABQD_IZs7y60I3lUrrFTzkpat"}, true},
@@ -46,6 +52,16 @@ func TestVideoIDFromPath(t *testing.T) {
 		{"/media/YouTube/Brain Break Land [UCA94TZluH5eQtkQpaCZQfRw]/2024-01-02 - Mario's Winter Run [0bNNs5GTru0].mkv", "0bNNs5GTru0"},
 		{`D:\YouTube\Brain Break Land\2024-01-02 - Run [0bNNs5GTru0].mp4`, "0bNNs5GTru0"},
 		{"2024-01-02 - Run [youtube-0bNNs5GTru0].mkv", "0bNNs5GTru0"},
+		{"2024-01-02 - Run [yt-0bNNs5GTru0].mkv", "0bNNs5GTru0"},
+		// An ID can itself begin "yt-".
+		{"2024-01-02 - Run [yt-abcdefgh].mkv", "yt-abcdefgh"},
+		// Curly brackets, with a prefix or without.
+		{"2024-01-02 - Run {0bNNs5GTru0}.mkv", "0bNNs5GTru0"},
+		{"2024-01-02 - Run {youtube-0bNNs5GTru0}.mkv", "0bNNs5GTru0"},
+		{"2024-01-02 - Run {yt-0bNNs5GTru0}.en.srt", "0bNNs5GTru0"},
+		{"2019-05-01 - {Compilation} Best Runs {_TZW4HHkF1s}.mkv", "_TZW4HHkF1s"},
+		// Round brackets are a title's own.
+		{"2024-01-02 - Run (0bNNs5GTru0).mkv", ""},
 		{"2024-01-02 - Run [0bNNs5GTru0].en.srt", "0bNNs5GTru0"},
 		// A title's own brackets do not win over the ID that closes the name.
 		{"2019-05-01 - [Compilation] Best Runs [0bNNs5GTru0].mkv", "0bNNs5GTru0"},
@@ -91,6 +107,11 @@ func TestRepairedRefs(t *testing.T) {
 	refs = RepairedRefs("Mix [PL22J3VaeABQD IZs7y60I3lUrrFTzkpat]")
 	if len(refs) != 1 || refs[0] != (Ref{RefPlaylist, "PL22J3VaeABQD_IZs7y60I3lUrrFTzkpat"}) {
 		t.Errorf("playlist: %+v", refs)
+	}
+	// The "yt-" prefix is set aside like "youtube-".
+	refs = RepairedRefs("Matthew Wood {yt-UC8WBLj aquoUjJkXPXMC5aA}")
+	if len(refs) != 1 || refs[0] != (Ref{RefChannel, "UC8WBLj_aquoUjJkXPXMC5aA"}) {
+		t.Errorf("yt- prefix: %+v", refs)
 	}
 	// Tags without spaces, and ordinary bracketed words, give nothing.
 	for _, text := range []string{"BrainBreakLand [UCA94TZluH5eQtkQpaCZQfRw]", "Show (PE & Brain Breaks)", "Show [UC is short]", "Plain title"} {

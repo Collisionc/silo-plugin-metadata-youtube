@@ -15,8 +15,9 @@ import (
 )
 
 // The provider is a specialist: it must be seeded disabled so it never
-// becomes the first provider of every new TV library, and it serves series,
-// seasons and episodes only.
+// becomes the first provider of every new library. It serves movies, series,
+// seasons and episodes: Silo offers a provider only the levels it gives a
+// default priority.
 func TestManifest(t *testing.T) {
 	m, err := publicmanifest.Load(manifestJSON)
 	if err != nil {
@@ -33,13 +34,10 @@ func TestManifest(t *testing.T) {
 		t.Errorf("default_enabled = %v, want false", meta["default_enabled"])
 	}
 	priority, _ := meta["default_priority"].(map[string]any)
-	for _, level := range []string{"series", "season", "episode"} {
+	for _, level := range []string{"movie", "series", "season", "episode"} {
 		if _, ok := priority[level]; !ok {
 			t.Errorf("no default priority for %s", level)
 		}
-	}
-	if _, ok := priority["movie"]; ok {
-		t.Error("movies are not supported")
 	}
 	var schema struct {
 		Properties map[string]any `json:"properties"`
@@ -71,7 +69,11 @@ func fakeAPI(t *testing.T) {
 		case "playlistItems":
 			_, _ = w.Write([]byte(`{"items":[{"snippet":{"title":"Run"},"contentDetails":{"videoId":"0bNNs5GTru0","videoPublishedAt":"2024-01-02T13:00:01Z"},"status":{"privacyStatus":"public"}}]}`))
 		case "videos":
-			_, _ = w.Write([]byte(`{"items":[{"id":"0bNNs5GTru0","snippet":{"title":"Mario's Winter Run","description":"How to play","publishedAt":"2024-01-02T13:00:01Z","thumbnails":{"maxres":{"url":"https://i.ytimg.com/vi/0bNNs5GTru0/maxresdefault.jpg","width":1280,"height":720}}},"contentDetails":{"duration":"PT5M14S"}}]}`))
+			if !strings.Contains(","+r.URL.Query().Get("id")+",", ",0bNNs5GTru0,") {
+				_, _ = w.Write([]byte(`{"items":[]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"items":[{"id":"0bNNs5GTru0","snippet":{"title":"Mario's Winter Run","description":"How to play","publishedAt":"2024-01-02T13:00:01Z","channelId":"UCA94TZluH5eQtkQpaCZQfRw","channelTitle":"Brain Break Land","thumbnails":{"maxres":{"url":"https://i.ytimg.com/vi/0bNNs5GTru0/maxresdefault.jpg","width":1280,"height":720}}},"contentDetails":{"duration":"PT5M14S"}}]}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -118,9 +120,9 @@ func TestSeriesThroughTheGRPCHandlers(t *testing.T) {
 		t.Errorf("title_aliases = %+v, want the folder title", aliases)
 	}
 
-	movie, err := s.Search(ctx, &pluginv1.SearchMetadataRequest{Query: "anything", ItemType: "movie"})
-	if err != nil || len(movie.GetResults()) != 0 {
-		t.Errorf("movie search = %+v, %v; movies are not served", movie.GetResults(), err)
+	book, err := s.Search(ctx, &pluginv1.SearchMetadataRequest{Query: "anything [0bNNs5GTru0]", ItemType: "book"})
+	if err != nil || len(book.GetResults()) != 0 {
+		t.Errorf("book search = %+v, %v; only series and movies are served", book.GetResults(), err)
 	}
 
 	ids, _ := structpb.NewStruct(map[string]any{"youtube": "UCA94TZluH5eQtkQpaCZQfRw"})
@@ -184,6 +186,8 @@ func TestEpisodeLookupFindsTheVideoInTheFileName(t *testing.T) {
 	for name, req := range map[string]*pluginv1.GetMetadataRequest{
 		"the series' ID and the file": {ItemType: "episode", ProviderIds: series, FilePath: file},
 		"the file alone":              {ItemType: "episode", FilePath: file},
+		"a curly tag":                 {ItemType: "episode", ProviderIds: series, FilePath: "/media/YouTube/Brain Break Land {yt-UCA94TZluH5eQtkQpaCZQfRw}/2024-01-02 - Mario's Winter Run {yt-0bNNs5GTru0}.mkv"},
+		"a bare curly tag":            {ItemType: "episode", ProviderIds: series, FilePath: "/media/YouTube/Brain Break Land {UCA94TZluH5eQtkQpaCZQfRw}/2024-01-02 - Mario's Winter Run {0bNNs5GTru0}.mkv"},
 		"the video's own ID":          {ItemType: "episode", ProviderId: "0bNNs5GTru0"},
 	} {
 		meta, err := s.GetMetadata(ctx, req)
@@ -204,6 +208,90 @@ func TestEpisodeLookupFindsTheVideoInTheFileName(t *testing.T) {
 	}
 	if asked := fakeAPICalls.Load() - before; asked != 0 {
 		t.Errorf("%d API calls for a lookup that names no video", asked)
+	}
+}
+
+// A single video in a movie library: the search finds it by the ID in the
+// title Silo read from its file name, and the lookups by the ID Silo then
+// keeps.
+func TestMovieThroughTheGRPCHandlers(t *testing.T) {
+	fakeAPI(t)
+	s := configuredWith(t, map[string]any{"api_key": "k", "backdrop": "video"})
+	ctx := context.Background()
+
+	query := "Mario's Winter Run [0bNNs5GTru0]"
+	search, err := s.Search(ctx, &pluginv1.SearchMetadataRequest{Query: query, ItemType: "movie", Year: 2024})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(search.GetResults()) != 1 {
+		t.Fatalf("search = %+v", search.GetResults())
+	}
+	hit := search.GetResults()[0]
+	if hit.GetProviderId() != "0bNNs5GTru0" || hit.GetItemType() != "movie" || hit.GetTitle() != "Mario's Winter Run" || hit.GetYear() != 2024 ||
+		hit.GetProviderIds().AsMap()["youtube"] != "0bNNs5GTru0" || hit.GetImageUrl() == "" {
+		t.Errorf("hit = %+v", hit)
+	}
+	if aliases := hit.GetTitleAliases(); len(aliases) != 1 || aliases[0].GetTitle() != query {
+		t.Errorf("title_aliases = %+v, want the title on disk", aliases)
+	}
+
+	before := fakeAPICalls.Load()
+	none, err := s.Search(ctx, &pluginv1.SearchMetadataRequest{Query: "Mario's Winter Run", ItemType: "movie"})
+	if err != nil || len(none.GetResults()) != 0 {
+		t.Errorf("search without an ID = %+v, %v; want nothing", none.GetResults(), err)
+	}
+	if asked := fakeAPICalls.Load() - before; asked != 0 {
+		t.Errorf("%d API calls for a title that names no video", asked)
+	}
+
+	ids, _ := structpb.NewStruct(map[string]any{"youtube": "0bNNs5GTru0"})
+	for name, req := range map[string]*pluginv1.GetMetadataRequest{
+		"the stored ID": {ItemType: "movie", ProviderIds: ids},
+		"the file":      {ItemType: "movie", FilePath: "/media/Videos/Mario's Winter Run [0bNNs5GTru0] (2024).mkv"},
+	} {
+		meta, err := s.GetMetadata(ctx, req)
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		item := meta.GetItem()
+		if item.GetProviderId() != "0bNNs5GTru0" || item.GetItemType() != "movie" || item.GetTitle() != "Mario's Winter Run" ||
+			item.GetYear() != 2024 || item.GetReleaseDate() != "2024-01-02" || item.GetRuntime() != 6 || item.GetOverview() != "How to play" ||
+			len(item.GetStudios()) != 1 || item.GetStudios()[0] != "Brain Break Land" ||
+			item.GetPosterPath() == "" || item.GetBackdropPath() != item.GetPosterPath() {
+			t.Errorf("%s: movie item = %+v", name, item)
+		}
+	}
+	// A channel's ID is not a video's: no answer, and no quota spent.
+	before = fakeAPICalls.Load()
+	channel, _ := structpb.NewStruct(map[string]any{"youtube": "UCA94TZluH5eQtkQpaCZQfRw"})
+	meta, err := s.GetMetadata(ctx, &pluginv1.GetMetadataRequest{ItemType: "movie", ProviderIds: channel})
+	if err != nil || meta.GetItem() != nil || fakeAPICalls.Load() != before {
+		t.Errorf("channel ID as a movie: item = %+v, err = %v, calls = %d", meta.GetItem(), err, fakeAPICalls.Load()-before)
+	}
+
+	images, err := s.GetImages(ctx, &pluginv1.GetImagesRequest{ItemType: "movie", ProviderIds: ids})
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := map[string]bool{}
+	for _, image := range images.GetImages() {
+		kinds[image.GetKind()] = true
+	}
+	if len(images.GetImages()) != 2 || !kinds["poster"] || !kinds["backdrop"] {
+		t.Errorf("movie images = %+v", images.GetImages())
+	}
+
+	// The default backdrop is none; the channel banner costs a channel lookup.
+	s = configuredWith(t, map[string]any{"api_key": "k"})
+	meta, err = s.GetMetadata(ctx, &pluginv1.GetMetadataRequest{ItemType: "movie", ProviderIds: ids})
+	if err != nil || meta.GetItem().GetBackdropPath() != "" || meta.GetItem().GetPosterPath() == "" {
+		t.Errorf("default backdrop: item = %+v, err = %v", meta.GetItem(), err)
+	}
+	s = configuredWith(t, map[string]any{"api_key": "k", "backdrop": "banner"})
+	meta, err = s.GetMetadata(ctx, &pluginv1.GetMetadataRequest{ItemType: "movie", ProviderIds: ids})
+	if err != nil || meta.GetItem().GetBackdropPath() != "https://yt3.googleusercontent.com/b=w2560" {
+		t.Errorf("banner backdrop = %q, err = %v", meta.GetItem().GetBackdropPath(), err)
 	}
 }
 

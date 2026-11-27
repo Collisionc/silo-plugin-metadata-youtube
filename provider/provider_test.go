@@ -35,6 +35,8 @@ type fakeYouTube struct {
 	noSearchHits bool
 	// gate, when set, holds playlistItems and videos calls until it closes.
 	gate chan struct{}
+	// gone are video IDs YouTube does not know, besides "deleted1234".
+	gone map[string]bool
 }
 
 // holdListings makes playlistItems and videos calls wait until the returned
@@ -119,7 +121,10 @@ func (f *fakeYouTube) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "videos":
 		var items []any
 		for _, id := range strings.Split(q.Get("id"), ",") {
-			if id == "deleted1234" {
+			f.mu.Lock()
+			gone := f.gone[id]
+			f.mu.Unlock()
+			if id == "deleted1234" || gone {
 				continue
 			}
 			items = append(items, map[string]any{
@@ -127,6 +132,7 @@ func (f *fakeYouTube) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				"snippet": map[string]any{
 					"title": "Full title of " + id, "description": "About " + id + "\n",
 					"publishedAt": "2024-01-02T13:00:01Z",
+					"channelId":   channelID, "channelTitle": "Brain Break Land",
 					"thumbnails": map[string]any{
 						"high":   map[string]any{"url": "https://i.ytimg.com/vi/" + id + "/hqdefault.jpg", "width": 480, "height": 360},
 						"maxres": map[string]any{"url": "https://i.ytimg.com/vi/" + id + "/maxresdefault.jpg", "width": 1280, "height": 720},

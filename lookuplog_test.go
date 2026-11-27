@@ -158,7 +158,7 @@ func TestHandlersLogWhatSiloSent(t *testing.T) {
 	if _, err := s.GetEpisodes(ctx, &pluginv1.GetEpisodesRequest{SeasonNumber: 2024}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Search(ctx, &pluginv1.SearchMetadataRequest{Query: "anything", ItemType: "movie"}); err != nil {
+	if _, err := s.Search(ctx, &pluginv1.SearchMetadataRequest{Query: "anything", ItemType: "book"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -169,7 +169,7 @@ func TestHandlersLogWhatSiloSent(t *testing.T) {
 		{"warn", "GetMetadata/season", noSeasons, "provider_id:season ids:none file:none"},
 		{"info", "GetEpisodes", found, "series:channel ids:none season:set"},
 		{"warn", "GetEpisodes", noID, "series:none ids:none season:set"},
-		{"info", "Search/movie", notAnswered, "query:set ids:none"},
+		{"info", "Search/book", notAnswered, "query:set ids:none"},
 	}
 	lines := captured.lines(t)
 	if len(lines) != len(wants) {

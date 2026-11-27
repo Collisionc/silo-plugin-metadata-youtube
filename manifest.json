@@ -8,9 +8,9 @@
   },
   "presentation": {
     "display_name": "YouTube Metadata",
-    "summary": "Show downloaded YouTube channels and playlists as TV series: one season per year, one episode per video.",
-    "description_markdown": "Maps a YouTube channel (or playlist) to a series, each year with uploads to a season, and each video to an episode dated by its upload, so channels downloaded by TubeSync, yt-dlp or similar tools behave like TV shows in Silo. Titles, descriptions, durations and thumbnails come from the YouTube Data API. Episodes are numbered MMDDxx within the year, as ZeroQI's Absolute Series Scanner numbers YouTube channels for Plex. The provider is installed disabled so it only runs in the libraries where you enable it.",
-    "setup_markdown": "1. Create a YouTube Data API v3 key in the Google Cloud console and enter it under **YouTube** below.\n2. Name each channel's folder after the channel, or put its ID in the name: `Channel Name [youtube-UCxxxxxxxxxxxxxxxxxxxxxx]`. A playlist folder takes `[youtube-PLxxxx]`.\n3. Name each file with its upload date, as TubeSync's `{yyyy_mm_dd} - {title_full} [{key}].{ext}` does: Silo links a dated file to the episode uploaded that day.\n4. Keep the channels in a TV library of their own and enable **YouTube** there as the only series metadata provider, with TVDB and TMDB off: Silo prefers any candidate with a TVDB, TMDB or IMDb ID, so a TV show with a channel's name would win.",
+    "summary": "Show downloaded YouTube channels and playlists as TV series: one season per year, one episode per video. Single videos can be movies.",
+    "description_markdown": "Maps a YouTube channel (or playlist) to a series, each year with uploads to a season, and each video to an episode dated by its upload, so channels downloaded by TubeSync, yt-dlp or similar tools behave like TV shows in Silo. Titles, descriptions, durations and thumbnails come from the YouTube Data API. Episodes are numbered MMDDxx within the year, as ZeroQI's Absolute Series Scanner numbers YouTube channels for Plex. A single video kept in a movie library is a movie, found by the video ID in its file name. The provider is installed disabled so it only runs in the libraries where you enable it.",
+    "setup_markdown": "1. Create a YouTube Data API v3 key in the Google Cloud console and enter it under **YouTube** below.\n2. Name each channel's folder after the channel, or put its ID in the name: `Channel Name [youtube-UCxxxxxxxxxxxxxxxxxxxxxx]`. A playlist folder takes `[youtube-PLxxxx]`.\n3. Name each file with its upload date, as TubeSync's `{yyyy_mm_dd} - {title_full} [{key}].{ext}` does: Silo links a dated file to the episode uploaded that day.\n4. Keep the channels in a TV library of their own and enable **YouTube** there as the only series metadata provider, with TVDB and TMDB off: Silo prefers any candidate with a TVDB, TMDB or IMDb ID, so a TV show with a channel's name would win.\n5. For single videos, make a movie library with **YouTube** as its only movie metadata provider, and name each file with the video's ID and upload year: `Title [xxxxxxxxxxx] (2024).mkv`.",
     "homepage_url": "https://github.com/collisionc/silo-plugin-metadata-youtube",
     "source_url": "https://github.com/collisionc/silo-plugin-metadata-youtube",
     "support_url": "https://github.com/collisionc/silo-plugin-metadata-youtube/issues",
@@ -38,9 +38,10 @@
       "type": "metadata_provider.v1",
       "id": "youtube",
       "display_name": "YouTube",
-      "description": "YouTube channels and playlists as TV series.",
+      "description": "YouTube channels and playlists as TV series, and single videos as movies.",
       "metadata": {
         "default_priority": {
+          "movie": 50,
           "series": 50,
           "season": 50,
           "episode": 50
@@ -92,7 +93,7 @@
           {
             "key": "backdrop",
             "label": "Backdrop",
-            "description": "The series background art. Channel banners and video thumbnails are full of logos and lettering, which makes the description written over them hard to read; none keeps a plain background.",
+            "description": "The background art of a series, or of a movie (for a movie, the thumbnail is the video's own). Channel banners and video thumbnails are full of logos and lettering, which makes the description written over them hard to read; none keeps a plain background.",
             "control": "ADMIN_FORM_CONTROL_SELECT",
             "default_value": "none",
             "options": [

@@ -11,6 +11,9 @@ shows sports leagues:
 | Year with uploads | Season (`2024`) |
 | Video | Episode `MMDDxx`, dated by its upload |
 
+A video kept on its own, in a movie library, is a movie: see
+[Single videos as movies](#single-videos-as-movies).
+
 Titles, descriptions, durations and thumbnails come from the
 [YouTube Data API v3](https://developers.google.com/youtube/v3). The series
 poster is the channel's avatar; a backdrop (the channel banner or newest
@@ -35,6 +38,9 @@ the folder name. The plugin looks for, in order:
 4. otherwise a YouTube channel search for the folder name without its
    bracketed tags (100 quota units), offering the top five channels.
 
+In any tag `yt-` can stand for `youtube-`, and the brackets can be square,
+curly or round: `{yt-UCxxxx}` and `[yt-PLxxxx]` work too.
+
 Silo turns underscores in a folder name into spaces before it searches, so a
 channel ID such as `UC8WBLj_aquoUjJkXPXMC5aA` arrives as
 `UC8WBLj aquoUjJkXPXMC5aA`. The plugin rebuilds the IDs a bracketed tag can
@@ -56,7 +62,10 @@ and its owner's uploads playlist as the weaker second candidate.
 
 A folder named exactly after the channel (`Brain Break Land`) usually matches
 by search. Put the channel ID in the name when a search picks the wrong
-channel, or use Silo's **Match** with the channel URL or `@handle`.
+channel, or use Silo's **Match** with the channel URL or `@handle`. The URL
+of any video on the channel works in **Match** too
+(`https://www.youtube.com/watch?v=0bNNs5GTru0`): the plugin looks the video
+up (1 quota unit) and offers its channel.
 
 Unlike Absolute Series Scanner, Silo does not read a `youtube.id` file: it
 passes plugins the folder name only.
@@ -90,9 +99,76 @@ YouTube/
 Two uploads on the same day are told apart by the title in the file name.
 Season folders are optional.
 
+The video ID in a file's name can be in square or curly brackets, alone or
+after `youtube-` or `yt-`: `[jiejNAUwcQ8]`, `{jiejNAUwcQ8}`,
+`{youtube-jiejNAUwcQ8}`, `{yt-jiejNAUwcQ8}`. The folder's tag takes the same
+forms, so all of these work:
+
+```
+engineerguyvideo {youtube-UC2bkHVIDjXS7sgrgjFtzOXQ}/2011-03-17 - LCD Monitor Teardown {youtube-jiejNAUwcQ8}.mkv
+engineerguyvideo {yt-UC2bkHVIDjXS7sgrgjFtzOXQ}/2011-03-17 - LCD Monitor Teardown {yt-jiejNAUwcQ8}.mkv
+engineerguyvideo {UC2bkHVIDjXS7sgrgjFtzOXQ}/2011-03-17 - LCD Monitor Teardown {jiejNAUwcQ8}.mkv
+engineerguyvideo [UC2bkHVIDjXS7sgrgjFtzOXQ]/2011-03-17 - LCD Monitor Teardown [jiejNAUwcQ8].mkv
+engineerguyvideo [youtube-UC2bkHVIDjXS7sgrgjFtzOXQ]/2011-03-17 - LCD Monitor Teardown [youtube-jiejNAUwcQ8].mkv
+```
+
 Dates are compared in UTC, as yt-dlp and TubeSync write them. If your
 downloader dates files in local time, set **Upload date time zone** to match;
 otherwise a video uploaded near midnight links to no episode.
+
+## Single videos as movies
+
+A channel folder suits a channel you follow: Silo lists every upload, the
+ones you have not downloaded too. For one video on its own (a talk, a
+concert, a documentary) use a movie library instead. There the video is a
+movie: its title, description, runtime and upload date, its thumbnail as
+the poster and its channel as the studio.
+
+The plugin finds a movie by the **video ID in its file name**, never by
+title, and Silo accepts the match by itself when the name also has the
+**upload year** in parentheses:
+
+```
+Videos/
+  Mario's Winter Run [0bNNs5GTru0] (2024).mkv
+  [dQw4w9WgXcQ] (2009) Never Gonna Give You Up (4K Remaster).mkv
+```
+
+| Name | yt-dlp output template |
+|---|---|
+| `Title [ID] (year)` | `%(title)s [%(id)s] (%(upload_date>%Y)s).%(ext)s` |
+| `[ID] (year) Title` | `[%(id)s] (%(upload_date>%Y)s) %(title)s.%(ext)s` |
+
+The second form always works: Silo reads a movie's title up to the year, so
+the title is the ID and nothing after it matters. The first reads better
+and works unless the video's own title holds a year in brackets (`(1987)`)
+or a release term such as `4K`, `HDR`, `1080p` or `x264`: Silo ends the
+title there, and the ID after it never reaches the plugin.
+
+The ID may also be written `{ID}`, `[youtube-ID]`, `{youtube-ID}` or
+`{yt-ID}`. A
+file can sit in a folder of the same name or straight in the library. What
+does not work, because Silo passes plugins the title it reads and nothing
+else:
+
+- the ID after the year: `Title (2024) [ID].mkv`;
+- the ID on the folder only, `Title {youtube-ID}/Title.mkv`: Silo takes the
+  title from the file.
+
+Silo turns underscores in a name into spaces here too. The plugin rebuilds
+the IDs the tag can have held and asks YouTube which exists, in the same
+call (1 quota unit).
+
+**The year.** Silo accepts a lone answer only with more points than an ID
+and a title give; a year that agrees supplies them. The year is the
+upload's, and one or two years off still matches. With no year in the name,
+or one further off (a 1964 film uploaded in 2015 and named `(1964)`), the
+file stays unmatched: use **Match** on it, where the plugin offers the
+video, or paste the video's URL there.
+
+**Backdrop** set to the newest video's thumbnail gives a movie its own
+thumbnail as background art; the channel banner costs one more unit per
+channel.
 
 ## Setup
 
@@ -120,7 +196,10 @@ otherwise a video uploaded near midnight links to no episode.
    automatic matching sets aside every candidate without a TVDB, TMDB or IMDb
    ID as soon as any provider returns one, so a TV show that shares a
    channel's name would win, or leave the channel unmatched.
-5. Scan the library.
+5. For [single videos](#single-videos-as-movies), make a movie library of
+   their own the same way, with **YouTube** as its only movie metadata
+   provider.
+6. Scan the library.
 
 ## Quota
 
@@ -135,6 +214,12 @@ until it is matched. The plugin keeps each search's answer for an hour, an
 empty one too, so a folder scanned all day costs at most 2,400 units, not
 100 per scan. Putting the ID in the folder name (`[youtube-UC...]`) avoids
 searches altogether.
+
+A movie costs 1 unit when Silo looks it up, and its details are then kept
+for a day. There is no search by title for movies. A name whose
+bracketed tag is not a video's ID (an 11-letter word such as
+`[Compilation]` looks like one) costs 1 unit an hour while Silo keeps
+scanning it.
 
 When the quota runs out, YouTube answers `quotaExceeded` until midnight
 Pacific time, and metadata calls fail until then. The plugin tells Silo the

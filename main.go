@@ -1,6 +1,6 @@
 // Command plugin is the YouTube metadata provider for Silo: YouTube channels
 // and playlists as TV series, one season per year of uploads and one episode
-// per video.
+// per video, and single videos as movies.
 package main
 
 import (
@@ -144,7 +144,7 @@ type metadataServer struct {
 func (s *metadataServer) Search(ctx context.Context, req *pluginv1.SearchMetadataRequest) (response *pluginv1.SearchMetadataResponse, err error) {
 	defer func() {
 		outcome := outcomeOf(true, len(response.GetResults()), err)
-		if err == nil && req.GetItemType() != "series" {
+		if err == nil && req.GetItemType() != "series" && req.GetItemType() != "movie" {
 			outcome = notAnswered
 		}
 		query := "query:set"
@@ -156,14 +156,19 @@ func (s *metadataServer) Search(ctx context.Context, req *pluginv1.SearchMetadat
 		err = statusError(err)
 	}()
 	response = &pluginv1.SearchMetadataResponse{}
-	if req.GetItemType() != "series" {
+	if req.GetItemType() != "series" && req.GetItemType() != "movie" {
 		return response, nil
 	}
 	p, err := s.runtime.current()
 	if err != nil {
 		return nil, err
 	}
-	hits, err := p.Search(ctx, req.GetQuery(), stringMap(req.GetProviderIds()))
+	var hits []provider.SearchHit
+	if req.GetItemType() == "movie" {
+		hits, err = p.SearchMovies(ctx, req.GetQuery(), stringMap(req.GetProviderIds()))
+	} else {
+		hits, err = p.Search(ctx, req.GetQuery(), stringMap(req.GetProviderIds()))
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -193,8 +198,8 @@ func (s *metadataServer) Search(ctx context.Context, req *pluginv1.SearchMetadat
 func (s *metadataServer) GetMetadata(ctx context.Context, req *pluginv1.GetMetadataRequest) (response *pluginv1.GetMetadataResponse, err error) {
 	itemType := req.GetItemType()
 	id := providerID(req.GetProviderIds(), req.GetProviderId())
-	if itemType == "episode" {
-		id = episodeVideoID(req.GetProviderIds(), req.GetProviderId(), req.GetFilePath())
+	if itemType == "episode" || itemType == "movie" {
+		id = videoID(req.GetProviderIds(), req.GetProviderId(), req.GetFilePath())
 	}
 	defer func() {
 		answers := 0
@@ -206,9 +211,9 @@ func (s *metadataServer) GetMetadata(ctx context.Context, req *pluginv1.GetMetad
 		case err != nil:
 		case itemType == "season":
 			outcome = noSeasons // Silo counts it a failed refresh; GetSeasons is where seasons come from
-		case itemType != "series" && itemType != "episode":
+		case itemType != "series" && itemType != "episode" && itemType != "movie":
 			outcome = notAnswered
-		case id == "" && itemType == "episode":
+		case id == "" && itemType != "series":
 			outcome = noVideoID
 		}
 		lookups.note("GetMetadata/"+itemType, outcome,
@@ -253,18 +258,57 @@ func (s *metadataServer) GetMetadata(ctx context.Context, req *pluginv1.GetMetad
 			PosterPath:  video.Snippet.Thumbnails.Best().URL,
 			ReleaseDate: dateOnly(video.Snippet.PublishedAt),
 		}}, nil
+	case "movie":
+		movie, err := p.Movie(ctx, id)
+		if err != nil || movie == nil {
+			return &pluginv1.GetMetadataResponse{}, err
+		}
+		backdrop, err := p.MovieBackdrop(ctx, movie)
+		if err != nil {
+			return nil, err
+		}
+		item, err := movieItem(movie, backdrop)
+		if err != nil {
+			return nil, err
+		}
+		return &pluginv1.GetMetadataResponse{Item: item}, nil
 	}
 	return &pluginv1.GetMetadataResponse{}, nil
 }
 
-// episodeVideoID picks the video an episode lookup is about. Silo keeps a
-// provider's ID for a series but not for an episode, so the lookup can arrive
-// with the series' ID or with none; the file names its own video
-// ("... [0bNNs5GTru0].mkv"). An ID that is not a video's is never sent to
-// YouTube as one: that would spend a quota unit to find nothing. A lookup
-// that names no video is logged by its caller (lookupLog), with what it
-// carried.
-func episodeVideoID(ids *structpb.Struct, fallback, filePath string) string {
+// movieItem is a video as a movie. The video's thumbnail is its poster: a
+// video has no other art.
+func movieItem(movie *provider.Movie, backdrop string) (*pluginv1.MetadataItem, error) {
+	ids, err := idStruct(movie.VideoID)
+	if err != nil {
+		return nil, err
+	}
+	item := &pluginv1.MetadataItem{
+		ProviderId:   movie.VideoID,
+		ItemType:     "movie",
+		Title:        movie.Title,
+		Year:         int32(movie.Year),
+		Overview:     movie.Overview,
+		Runtime:      int32(movie.RuntimeMinutes),
+		ProviderIds:  ids,
+		PosterPath:   movie.Thumbnail.URL,
+		BackdropPath: backdrop,
+		ReleaseDate:  movie.ReleaseDate,
+	}
+	if movie.ChannelName != "" {
+		item.Studios = []string{movie.ChannelName}
+	}
+	return item, nil
+}
+
+// videoID picks the video an episode or movie lookup is about. Silo keeps a
+// provider's ID for a series or a movie but not for an episode, so an
+// episode's lookup can arrive with the series' ID or with none; the file
+// names its own video ("... [0bNNs5GTru0].mkv"). An ID that is not a video's
+// is never sent to YouTube as one: that would spend a quota unit to find
+// nothing. A lookup that names no video is logged by its caller (lookupLog),
+// with what it carried.
+func videoID(ids *structpb.Struct, fallback, filePath string) string {
 	for _, candidate := range []string{ownID(ids), strings.TrimSpace(fallback)} {
 		if youtube.IsVideoID(candidate) {
 			return candidate
@@ -426,9 +470,9 @@ func (s *metadataServer) GetImages(ctx context.Context, req *pluginv1.GetImagesR
 		case err != nil || id == "":
 		case strings.Contains(id, "/"), req.GetItemType() == "series" && req.SeasonNumber != nil:
 			outcome = notAnswered // seasons have no art of their own
-		case req.GetItemType() == "episode" && !youtube.IsVideoID(id):
+		case (req.GetItemType() == "episode" || req.GetItemType() == "movie") && !youtube.IsVideoID(id):
 			outcome = noVideoID
-		case req.GetItemType() != "series" && req.GetItemType() != "episode":
+		case req.GetItemType() != "series" && req.GetItemType() != "episode" && req.GetItemType() != "movie":
 			outcome = notAnswered
 		}
 		lookups.note("GetImages/"+req.GetItemType(), outcome,
@@ -473,6 +517,24 @@ func (s *metadataServer) GetImages(ctx context.Context, req *pluginv1.GetImagesR
 		}
 		if thumb := video.Snippet.Thumbnails.Best(); thumb.URL != "" {
 			response.Images = append(response.Images, &pluginv1.ImageRecord{Kind: "still", Url: thumb.URL, Width: int32(thumb.Width), Height: int32(thumb.Height)})
+		}
+	case "movie":
+		if !youtube.IsVideoID(id) {
+			return response, nil
+		}
+		movie, err := p.Movie(ctx, id)
+		if err != nil || movie == nil {
+			return response, err
+		}
+		if thumb := movie.Thumbnail; thumb.URL != "" {
+			response.Images = append(response.Images, &pluginv1.ImageRecord{Kind: "poster", Url: thumb.URL, Width: int32(thumb.Width), Height: int32(thumb.Height)})
+		}
+		backdrop, err := p.MovieBackdrop(ctx, movie)
+		if err != nil {
+			return response, err
+		}
+		if backdrop != "" {
+			response.Images = append(response.Images, &pluginv1.ImageRecord{Kind: "backdrop", Url: backdrop})
 		}
 	}
 	return response, nil
