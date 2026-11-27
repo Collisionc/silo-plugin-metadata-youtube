@@ -22,9 +22,9 @@ const DefaultBaseURL = "https://www.googleapis.com/youtube/v3"
 
 const (
 	maxPageSize = 50
-	// maxPlaylistPages bounds one listing at 25,000 videos, so a mistyped ID
+	// MaxPlaylistPages bounds one listing at 25,000 videos, so a mistyped ID
 	// for an enormous playlist cannot spend the whole day's quota.
-	maxPlaylistPages = 500
+	MaxPlaylistPages = 500
 	maxResponseBody  = 8 << 20
 	maxAttempts      = 3
 )
@@ -290,7 +290,7 @@ const (
 	playlistFields = "items(id,snippet(title,description,channelId,channelTitle,publishedAt,thumbnails))"
 
 	playlistItemParts  = "snippet,contentDetails,status"
-	playlistItemFields = "nextPageToken,items(snippet/title,contentDetails(videoId,videoPublishedAt),status/privacyStatus)"
+	playlistItemFields = "nextPageToken,pageInfo/totalResults,items(snippet/title,contentDetails(videoId,videoPublishedAt),status/privacyStatus)"
 
 	videoParts  = "snippet,contentDetails"
 	videoFields = "items(id,snippet(title,description,publishedAt,channelId,channelTitle,thumbnails),contentDetails/duration)"
@@ -406,29 +406,33 @@ type PlaylistItem struct {
 	} `json:"status"`
 }
 
-// PlaylistItems lists every entry of a playlist, one call per 50 entries.
-func (c *Client) PlaylistItems(ctx context.Context, playlistID string) ([]PlaylistItem, error) {
-	var all []PlaylistItem
-	pageToken := ""
-	for page := 0; page < maxPlaylistPages; page++ {
-		params := url.Values{"part": {playlistItemParts}, "fields": {playlistItemFields}, "playlistId": {playlistID}, "maxResults": {fmt.Sprint(maxPageSize)}}
-		if pageToken != "" {
-			params.Set("pageToken", pageToken)
-		}
-		var out struct {
-			NextPageToken string         `json:"nextPageToken"`
-			Items         []PlaylistItem `json:"items"`
-		}
-		if err := c.get(ctx, "playlistItems", params, &out); err != nil {
-			return nil, err
-		}
-		all = append(all, out.Items...)
-		if out.NextPageToken == "" {
-			return all, nil
-		}
-		pageToken = out.NextPageToken
+// PlaylistPage is one page of a playlist's entries, at most 50.
+type PlaylistPage struct {
+	Items []PlaylistItem
+	// Next is the token of the page after this one; empty on the last.
+	Next string
+	// Total is how many entries YouTube says the playlist has.
+	Total int
+}
+
+// PlaylistPage fetches one page of a playlist: the first when pageToken is
+// empty. An uploads playlist lists the newest upload first.
+func (c *Client) PlaylistPage(ctx context.Context, playlistID, pageToken string) (PlaylistPage, error) {
+	params := url.Values{"part": {playlistItemParts}, "fields": {playlistItemFields}, "playlistId": {playlistID}, "maxResults": {fmt.Sprint(maxPageSize)}}
+	if pageToken != "" {
+		params.Set("pageToken", pageToken)
 	}
-	return all, nil
+	var out struct {
+		NextPageToken string `json:"nextPageToken"`
+		PageInfo      struct {
+			TotalResults int `json:"totalResults"`
+		} `json:"pageInfo"`
+		Items []PlaylistItem `json:"items"`
+	}
+	if err := c.get(ctx, "playlistItems", params, &out); err != nil {
+		return PlaylistPage{}, err
+	}
+	return PlaylistPage{Items: out.Items, Next: out.NextPageToken, Total: out.PageInfo.TotalResults}, nil
 }
 
 // Video is one YouTube video.

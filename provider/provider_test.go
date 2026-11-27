@@ -38,6 +38,10 @@ type fakeYouTube struct {
 	gate chan struct{}
 	// gone are video IDs YouTube does not know, besides "deleted1234".
 	gone map[string]bool
+	// newUpload puts one more video first on the uploads playlist.
+	newUpload bool
+	// noTotals leaves a playlist's size out of its pages.
+	noTotals bool
 }
 
 // holdListings makes playlistItems and videos calls wait until the returned
@@ -118,7 +122,20 @@ func (f *fakeYouTube) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			body = map[string]any{"items": []any{}}
 		}
 	case "playlistItems":
-		body = playlistPage(q.Get("playlistId"), q.Get("pageToken"))
+		page := playlistPage(q.Get("playlistId"), q.Get("pageToken"))
+		f.mu.Lock()
+		total := 6
+		if f.newUpload && len(page["items"].([]any)) > 0 {
+			total++
+			if q.Get("pageToken") == "" {
+				page["items"] = append([]any{item("brandnew001", "Brand new", "2025-11-01T10:00:00Z", "public")}, page["items"].([]any)...)
+			}
+		}
+		if !f.noTotals && len(page["items"].([]any)) > 0 {
+			page["pageInfo"] = map[string]any{"totalResults": total}
+		}
+		f.mu.Unlock()
+		body = page
 	case "videos":
 		var items []any
 		for _, id := range strings.Split(q.Get("id"), ",") {
@@ -503,20 +520,71 @@ func TestSeriesDetailSeasonsAndEpisodes(t *testing.T) {
 	}
 }
 
-func TestListingExpires(t *testing.T) {
+// After an hour a listing is checked by its first page, one call. It is
+// listed whole again when that page shows a change, and once a day whatever
+// the page shows.
+func TestListingIsCheckedByItsFirstPage(t *testing.T) {
 	p, fake := newTestProvider(t)
-	now := time.Now()
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
 	p.now = func() time.Time { return now }
 	ctx := context.Background()
-	if _, err := p.Seasons(ctx, channelID); err != nil {
-		t.Fatal(err)
+	calls := func() int { return fake.count("playlistItems") }
+	seasons := func() []Season {
+		t.Helper()
+		seasons, err := p.Seasons(ctx, channelID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return seasons
 	}
+
+	seasons()
+	if calls() != 2 {
+		t.Fatalf("first listing: %d calls, want 2 (both pages)", calls())
+	}
+	seasons()
+	if calls() != 2 {
+		t.Errorf("inside the hour: %d calls, want none more", calls())
+	}
+	for range 3 {
+		now = now.Add(listingTTL + time.Minute)
+		seasons()
+	}
+	if calls() != 5 {
+		t.Errorf("three checks, nothing new: %d calls, want 5 (one page each)", calls())
+	}
+
+	fake.mu.Lock()
+	fake.newUpload = true
+	fake.mu.Unlock()
 	now = now.Add(listingTTL + time.Minute)
-	if _, err := p.Seasons(ctx, channelID); err != nil {
-		t.Fatal(err)
+	if got := seasons(); calls() != 7 || got[len(got)-1].Number != 2025 || got[len(got)-1].Count != 2 {
+		t.Errorf("a new upload: %d calls, seasons %+v; want 7 calls and two uploads in 2025", calls(), got)
+	}
+
+	now = now.Add(listingMaxAge + time.Minute)
+	seasons()
+	if calls() != 9 {
+		t.Errorf("a day later: %d calls, want 9 (listed whole whatever its first page says)", calls())
+	}
+}
+
+// A playlist whose size YouTube does not give cannot be checked by its first
+// page: it is listed whole each time.
+func TestListingWithoutASizeIsListedWhole(t *testing.T) {
+	p, fake := newTestProvider(t)
+	fake.noTotals = true
+	now := time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)
+	p.now = func() time.Time { return now }
+	ctx := context.Background()
+	for range 2 {
+		if _, err := p.Seasons(ctx, channelID); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(listingTTL + time.Minute)
 	}
 	if n := fake.count("playlistItems"); n != 4 {
-		t.Errorf("playlistItems calls = %d, want 4 (listed again after expiry)", n)
+		t.Errorf("playlistItems calls = %d, want 4", n)
 	}
 }
 

@@ -260,7 +260,11 @@ the IMDb ID it has; a wrong one is changed in Silo.
 A key has 10,000 units a day by default. A channel search costs 100 units;
 every other call costs 1 unit per 50 results. Refreshing a channel of 1,000
 videos costs about 40 units: 20 to list it, 20 for the videos' details. The
-plugin caches listings for an hour and video details for a day.
+plugin keeps video details for a day. It keeps a listing for an hour, and
+then asks for its first page, 1 unit: when that shows no new upload and the
+same number of videos, the listing is good for another hour. Once a day it
+is listed whole again. All of this lasts while the plugin runs: Silo stops
+an idle plugin after 30 minutes, and the next scan lists the channel anew.
 
 A channel search happens only for a folder whose name holds no channel or
 playlist ID or @handle, and Silo repeats it on every scan of that folder

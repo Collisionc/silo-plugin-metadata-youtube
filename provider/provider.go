@@ -24,9 +24,15 @@ import (
 const ProviderKey = "youtube"
 
 const (
-	listingTTL = time.Hour
-	detailTTL  = 24 * time.Hour
-	seriesTTL  = 6 * time.Hour
+	// listingTTL is how long a listing is used without asking YouTube. After
+	// it the listing's first page is asked for, one call, and when that shows
+	// nothing new the listing is used for another listingTTL, until it is
+	// listingMaxAge old: then it is listed whole again, since a change deep in
+	// a playlist does not show on its first page.
+	listingTTL    = time.Hour
+	listingMaxAge = 24 * time.Hour
+	detailTTL     = 24 * time.Hour
+	seriesTTL     = 6 * time.Hour
 	// searchLimit is how many channels a free-text search offers. The search
 	// itself costs 100 quota units whatever the count.
 	searchLimit = 5
@@ -65,7 +71,7 @@ type Provider struct {
 
 	mu       sync.Mutex
 	series   map[string]cached[*Series]
-	listings map[string]cached[[]NumberedUpload]
+	listings map[string]cached[listing]
 	videos   map[string]cached[youtube.Video]
 	// searches holds the channel IDs a free-text search found, by query.
 	searches map[string]cached[[]string]
@@ -139,7 +145,7 @@ func New(client *youtube.Client, loc *time.Location, options ...Option) *Provide
 		now:      time.Now,
 		work:     newBackground(),
 		series:   make(map[string]cached[*Series]),
-		listings: make(map[string]cached[[]NumberedUpload]),
+		listings: make(map[string]cached[listing]),
 		videos:   make(map[string]cached[youtube.Video]),
 		searches: make(map[string]cached[[]string]),
 	}
@@ -607,6 +613,33 @@ func (p *Provider) storeSeries(series *Series) {
 	put(p.series, series.ID, series, now, now.Add(seriesTTL), maxCachedSeries)
 }
 
+// listing is a series' videos as last listed, with what its first page
+// looked like then.
+type listing struct {
+	uploads []NumberedUpload
+	// listed is when every page was last fetched.
+	listed time.Time
+	// total and head are the playlist's size and the video IDs of its first
+	// page, in order, at that listing. A new upload is first on an uploads
+	// playlist, and a playlist that gains or loses an entry changes size, so
+	// a first page that still says the same means the listing still holds.
+	total int
+	head  []string
+}
+
+// current reports whether a first page fetched now shows the listing unchanged.
+func (l listing) current(page youtube.PlaylistPage) bool {
+	return page.Total > 0 && page.Total == l.total && slices.Equal(pageHead(page), l.head)
+}
+
+func pageHead(page youtube.PlaylistPage) []string {
+	head := make([]string, 0, len(page.Items))
+	for _, item := range page.Items {
+		head = append(head, item.ContentDetails.VideoID)
+	}
+	return head
+}
+
 // Listing returns a series' videos, numbered by Number.
 //
 // A channel of thousands of videos takes longer to list (one call per 50)
@@ -618,12 +651,12 @@ func (p *Provider) Listing(ctx context.Context, series *Series) ([]NumberedUploa
 	entry, ok := p.listings[series.ID]
 	p.mu.Unlock()
 	if ok && !p.now().After(entry.expires) {
-		return entry.value, nil
+		return entry.value.uploads, nil
 	}
 	if series.PlaylistID == "" {
 		return nil, fmt.Errorf("youtube: %s has no playlist to list", series.ID)
 	}
-	listing, err := p.work.do(ctx, "listing:"+series.ID, func(ctx context.Context) (any, error) {
+	uploads, err := p.work.do(ctx, "listing:"+series.ID, func(ctx context.Context) (any, error) {
 		return p.fetchListing(ctx, series)
 	})
 	if errors.Is(err, ErrStillWorking) {
@@ -632,20 +665,42 @@ func (p *Provider) Listing(ctx context.Context, series *Series) ([]NumberedUploa
 	if err != nil {
 		return nil, err
 	}
-	return listing.([]NumberedUpload), nil
+	return uploads.([]NumberedUpload), nil
 }
 
-// fetchListing lists a series' videos, numbers them and caches the result.
+// fetchListing brings a series' listing up to date and caches it: with one
+// call when the playlist's first page shows nothing has changed since it was
+// listed, and otherwise by listing it whole, a call per 50 videos.
 func (p *Provider) fetchListing(ctx context.Context, series *Series) ([]NumberedUpload, error) {
-	items, err := p.yt.PlaylistItems(ctx, series.PlaylistID)
+	first, err := p.yt.PlaylistPage(ctx, series.PlaylistID, "")
 	if err != nil {
 		var apiErr *youtube.APIError
 		// A channel with no public uploads has no uploads playlist.
-		if errors.As(err, &apiErr) && apiErr.Status == 404 {
-			items = nil
-		} else {
+		if !errors.As(err, &apiErr) || apiErr.Status != 404 {
 			return nil, err
 		}
+		first = youtube.PlaylistPage{}
+	}
+	now := p.now()
+	p.mu.Lock()
+	known, ok := p.listings[series.ID]
+	if ok && known.value.current(first) && now.Sub(known.value.listed) < listingMaxAge {
+		known.expires = now.Add(listingTTL)
+		p.listings[series.ID] = known
+		p.mu.Unlock()
+		return known.value.uploads, nil
+	}
+	p.mu.Unlock()
+
+	items := first.Items
+	next := first.Next
+	for page := 1; next != "" && page < youtube.MaxPlaylistPages; page++ {
+		more, err := p.yt.PlaylistPage(ctx, series.PlaylistID, next)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, more.Items...)
+		next = more.Next
 	}
 	uploads := make([]Upload, 0, len(items))
 	for _, item := range items {
@@ -660,8 +715,8 @@ func (p *Provider) fetchListing(ctx context.Context, series *Series) ([]Numbered
 	}
 	numbered := Number(uploads, p.loc, p.mode)
 	p.mu.Lock()
-	now := p.now()
-	put(p.listings, series.ID, numbered, now, now.Add(listingTTL), maxCachedListings)
+	now = p.now()
+	put(p.listings, series.ID, listing{uploads: numbered, listed: now, total: first.Total, head: pageHead(first)}, now, now.Add(listingTTL), maxCachedListings)
 	p.mu.Unlock()
 	return numbered, nil
 }

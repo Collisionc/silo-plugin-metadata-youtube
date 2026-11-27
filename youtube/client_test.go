@@ -91,7 +91,7 @@ func TestEveryCallNamesItsFields(t *testing.T) {
 	ctx := context.Background()
 	_, _ = c.Channels(ctx, []string{checkKeyChannel})
 	_, _ = c.Playlists(ctx, []string{"PL22J3VaeABQD_IZs7y60I3lUrrFTzkpat"})
-	_, _ = c.PlaylistItems(ctx, "UUBR8-60-B28hp2BmDPdntcQ")
+	_, _ = c.PlaylistPage(ctx, "UUBR8-60-B28hp2BmDPdntcQ", "")
 	_, _ = c.Videos(ctx, []string{"0bNNs5GTru0"})
 	_, _ = c.SearchChannels(ctx, "name", 5)
 	for _, resource := range []string{"channels", "playlists", "playlistItems", "videos", "search"} {
