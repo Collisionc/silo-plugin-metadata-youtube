@@ -262,22 +262,36 @@ func (p *Provider) Search(ctx context.Context, query string, providerIDs map[str
 	if err != nil || len(ids) == 0 {
 		return nil, err
 	}
-	channels, err := p.yt.Channels(ctx, ids)
-	if err != nil {
-		return nil, err
+	// The channels a kept search found are kept too (seriesTTL): a folder
+	// scanned again within the hour costs no unit at all.
+	found := make(map[string]*Series, len(ids))
+	var unknown []string
+	for _, id := range ids {
+		if series, ok := p.cachedSeries(id); ok {
+			found[id] = series
+		} else {
+			unknown = append(unknown, id)
+		}
 	}
-	byID := make(map[string]youtube.Channel, len(channels))
-	for _, ch := range channels {
-		byID[ch.ID] = ch
+	if len(unknown) > 0 {
+		channels, err := p.yt.Channels(ctx, unknown)
+		if err != nil {
+			return nil, err
+		}
+		for _, ch := range channels {
+			series := seriesFromChannel(ch)
+			p.storeSeries(series)
+			found[series.ID] = series
+		}
 	}
 	hits := make([]SearchHit, 0, len(ids))
+	existing := make([]string, 0, len(ids))
 	for _, id := range ids { // keep YouTube's ranking
-		ch, ok := byID[id]
+		series, ok := found[id]
 		if !ok {
 			continue
 		}
-		series := seriesFromChannel(ch)
-		p.storeSeries(series)
+		existing = append(existing, id)
 		hit := series.hit()
 		// The folder is the channel's name run together or punctuated
 		// differently ("BrainBreakLand" for "Brain Break Land"): the same
@@ -286,6 +300,10 @@ func (p *Provider) Search(ctx context.Context, query string, providerIDs map[str
 			hit.Aliases = []string{text}
 		}
 		hits = append(hits, hit)
+	}
+	if len(existing) < len(ids) {
+		// A result YouTube no longer has is not asked about again.
+		p.keepSearch(text, existing)
 	}
 	return hits, nil
 }
@@ -559,6 +577,17 @@ func (p *Provider) searchChannels(ctx context.Context, text string) ([]string, e
 	put(p.searches, key, ids, now, now.Add(searchTTL), maxCachedSearches)
 	p.mu.Unlock()
 	return ids, nil
+}
+
+// keepSearch replaces the channels kept for a search, for as long as the
+// search itself is kept.
+func (p *Provider) keepSearch(text string, ids []string) {
+	key := strings.ToLower(text)
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if entry, ok := p.searches[key]; ok {
+		p.searches[key] = cached[[]string]{value: ids, expires: entry.expires}
+	}
 }
 
 func (p *Provider) cachedSeries(id string) (*Series, bool) {

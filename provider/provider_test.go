@@ -365,6 +365,11 @@ func TestSearchByTitleIsAskedOnceAnHour(t *testing.T) {
 	if fake.count("search") != 1 {
 		t.Errorf("searches = %d, want 1", fake.count("search"))
 	}
+	// Nor are the channels it found looked up again, the one YouTube no
+	// longer has among them: the folder's later scans cost nothing.
+	if fake.count("channels") != 1 {
+		t.Errorf("channel lookups = %d, want 1", fake.count("channels"))
+	}
 
 	fake.noSearchHits = true
 	for range 3 {
