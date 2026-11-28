@@ -56,7 +56,7 @@
       "title": "YouTube",
       "description": "YouTube Data API access",
       "required": false,
-      "json_schema": "{\"type\":\"object\",\"properties\":{\"api_key\":{\"type\":\"string\"},\"timezone\":{\"type\":\"string\"},\"seasons\":{\"type\":\"string\",\"enum\":[\"year\",\"single\"]},\"backdrop\":{\"type\":\"string\",\"enum\":[\"none\",\"banner\",\"video\"]},\"imdb\":{\"type\":\"string\"},\"episode_overview\":{\"type\":\"string\",\"enum\":[\"full\",\"2000\",\"1000\",\"500\",\"250\"]}},\"additionalProperties\":false}",
+      "json_schema": "{\"type\":\"object\",\"properties\":{\"api_key\":{\"type\":\"string\"},\"timezone\":{\"type\":\"string\"},\"seasons\":{\"type\":\"string\",\"enum\":[\"year\",\"single\"]},\"backdrop\":{\"type\":\"string\",\"enum\":[\"none\",\"banner\",\"video\"]},\"episode_overview\":{\"type\":\"string\",\"enum\":[\"full\",\"2000\",\"1000\",\"500\",\"250\"]}},\"additionalProperties\":false}",
       "admin_form": {
         "fields": [
           {
