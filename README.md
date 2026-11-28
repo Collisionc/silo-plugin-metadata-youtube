@@ -19,6 +19,12 @@ Titles, descriptions, durations and thumbnails come from the
 poster is the channel's avatar; a backdrop (the channel banner or newest
 thumbnail) is optional.
 
+![A channel as a series in Silo: its avatar as the poster, its description, and its videos as dated episodes with their thumbnails](docs/series-view.png)
+
+A channel in Silo, with **Seasons** set to **One season**. The picture is a
+mock-up: the channel, its videos and the artwork are made up
+([its source](docs/series-view.html)).
+
 ## How files are matched
 
 The numbering and folder tags follow ZeroQI's
