@@ -45,6 +45,18 @@ func TestManifest(t *testing.T) {
 	if err := json.Unmarshal([]byte(m.GetGlobalConfigSchema()[0].GetJsonSchema()), &schema); err != nil {
 		t.Fatalf("config schema: %v", err)
 	}
+	// Silo draws a field for every property the schema declares, and shows
+	// the value of one the form does not mark as a secret: a property left
+	// behind by a removed setting is a stray field on the settings page.
+	inForm := map[string]bool{}
+	for _, field := range m.GetGlobalConfigSchema()[0].GetAdminForm().GetFields() {
+		inForm[field.GetKey()] = true
+	}
+	for property := range schema.Properties {
+		if !inForm[property] {
+			t.Errorf("JSON schema property %q is not a field of the admin form", property)
+		}
+	}
 	for _, field := range m.GetGlobalConfigSchema()[0].GetAdminForm().GetFields() {
 		if _, ok := schema.Properties[field.GetKey()]; !ok {
 			t.Errorf("admin form field %q is not in the JSON schema", field.GetKey())
